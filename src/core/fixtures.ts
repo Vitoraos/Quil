@@ -230,6 +230,74 @@ export function referenceProject(): ProjectState {
   return state
 }
 
+/** A tiny fixture project for the landing-page live demo: one page with four
+ * buttons. A global decision sets every button's bgColor to the accent, and an
+ * instance override on the promo button (instance rank outranks global) keeps
+ * it at its own colour when the global rule changes. */
+export function demoProject(): ProjectState {
+  const state = createProjectState('proj-demo' as ProjectId, 'Demo')
+
+  const page = { id: 'page-demo' as PageId, name: 'Demo', sectionIds: ['sec-demo' as ElementId] }
+  state.pages.set(page.id, page)
+
+  const sectionId = 'sec-demo' as ElementId
+  const section: any = {
+    id: sectionId,
+    kind: 'section',
+    pageId: page.id,
+    parentId: null,
+    childIds: ['el-demo-btn-1' as ElementId, 'el-demo-btn-2' as ElementId, 'el-demo-btn-3' as ElementId, 'el-demo-btn-4' as ElementId],
+    rev: 0,
+    props: { bgColor: '#141418', padding: { value: 24 } }
+  }
+  state.nodes.set(sectionId, section as never)
+
+  const B1 = 'el-demo-btn-1' as ElementId
+  const B2 = 'el-demo-btn-2' as ElementId
+  const B3 = 'el-demo-btn-3' as ElementId
+  const B4 = 'el-demo-btn-4' as ElementId
+
+  const makeButton = (id: ElementId, label: string, bgColor?: string) => {
+    const node: any = {
+      id,
+      kind: 'button',
+      pageId: page.id,
+      parentId: sectionId,
+      childIds: [],
+      rev: 0,
+      props: { label, bgColor: bgColor ?? '#1E1E22', textColor: '#F5F3EC', radius: 8, fontWeight: 600 }
+    }
+    state.nodes.set(id, node as never)
+  }
+
+  makeButton(B1, 'Publish')
+  makeButton(B2, 'Save draft')
+  makeButton(B3, 'Promo — override stays', '#868076')
+  makeButton(B4, 'More')
+
+  const globalDec: any = {
+    id: 'dec-demo-global-btn' as never,
+    property: 'bgColor',
+    value: '#8B5CF6',
+    scope: { kind: 'global', targetType: 'button' },
+    status: 'approved',
+    seq: 1
+  }
+  const promoDec: any = {
+    id: 'dec-demo-promo-btn' as never,
+    property: 'bgColor',
+    value: '#868076',
+    scope: { kind: 'instance', elementId: B3 },
+    status: 'approved',
+    seq: 2
+  }
+  state.decisions.set(globalDec.id, globalDec)
+  state.decisions.set(promoDec.id, promoDec)
+  state.nextDecisionSeq = 3
+
+  return state
+}
+
 export function buildSyntheticFixture(totalNodes: number): ProjectState {
   const state = createProjectState('proj-synth' as ProjectId, 'Performance Benchmark Project')
   const page: Page = {
