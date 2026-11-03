@@ -3,7 +3,7 @@
 ## What Quil is
 Quil is a guided design workspace for websites. Users make design decisions progressively. Quil stores each approved decision as explicit data (a scoped constraint) and applies it deterministically to later generation and editing. Nothing becomes part of the design system just because AI generated it. It becomes canonical only after the user approves it.
 
-The MVP proves one thing: a user decides once, and Quil preserves and applies that decision across the app. Reference project: a boutique-hotel booking site with Home and Rooms pages.
+The MVP proves one thing: a user decides once, and Quil preserves and applies that decision across the app. Reference project: a site-agnostic starter project with Home and About pages.
 
 ## Architecture you must preserve
 1. Structured state is the source of truth: a typed project document (project > pages > sections > elements) plus a decision registry plus an asset registry. The canvas is a view of that state. HTML is never the source of truth.
