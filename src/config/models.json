@@ -1,0 +1,49 @@
+{
+  "models": [
+    {
+      "provider": "anthropic",
+      "apiId": "claude-opus-5-5",
+      "label": "Claude Opus 5.5",
+      "recommended": true,
+      "why": "Strongest on briefs written to a spec",
+      "source": "https://modelgrep.com/best/design",
+      "verifiedOn": "2026-10-01"
+    },
+    {
+      "provider": "anthropic",
+      "apiId": "claude-sonnet-5-5",
+      "label": "Claude Sonnet 5.5",
+      "recommended": false,
+      "why": "Lower-cost default",
+      "source": "https://modelgrep.com/best/design",
+      "verifiedOn": "2026-10-01"
+    },
+    {
+      "provider": "openai",
+      "apiId": "gpt-5.6-sol",
+      "label": "GPT-5.6 Sol",
+      "recommended": true,
+      "why": "Ranks first on live website arena",
+      "source": "https://benchmarklist.com/arenas/design_arena_website/",
+      "verifiedOn": "2026-10-01"
+    },
+    {
+      "provider": "google",
+      "apiId": "gemini-3.6-flash",
+      "label": "Gemini 3.6 Flash",
+      "recommended": false,
+      "why": "Fast, low-cost, solid layouts",
+      "source": "https://betterstack.com/community/guides/ai/kimi-claude-astra-design/",
+      "verifiedOn": "2026-10-01"
+    },
+    {
+      "provider": "openrouter",
+      "apiId": "moonshotai/kimi-k3",
+      "label": "Kimi K3",
+      "recommended": true,
+      "why": "Topped website category in arena snapshots",
+      "source": "https://llm-stats.com/best-ai-for-ui-design",
+      "verifiedOn": "2026-10-01"
+    }
+  ]
+}

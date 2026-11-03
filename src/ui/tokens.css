@@ -1,0 +1,100 @@
+/* Quil design system tokens.
+ *
+ * Rule: every colour, type size, space, radius, shadow and duration lives here.
+ * Components must not contain raw colours, font sizes or shadows.
+ *
+ * Dark theme only. Monochrome with no pure white / pure black, plus ONE violet
+ * accent. Text intensity is colour tone, never opacity.
+ */
+
+:root {
+  /* ---------- Backgrounds (dark theme, no pure black) ---------- */
+  --quil-bg: #0A0A0C;
+  --quil-surface: #141418;
+  --quil-surface-hover: #1E1E22;
+  --quil-line: #27272B;
+
+  /* ---------- Text intensity — colour tone, never opacity ---------- */
+  --quil-text-100: #F5F3EC;
+  --quil-text-95: #E7E4DC;
+  --quil-text-90: #CFCBC1;
+  --quil-text-85: #B3AEA4;
+  --quil-text-80: #9A9489;
+  --quil-text-75: #8A847A;
+  --quil-text-70: #868076;
+
+  /* ---------- Single violet accent ---------- */
+  --quil-accent: #8B5CF6;
+  --quil-accent-hover: #7C3AED;
+
+  /* Label colour on the accent — contract requires var(--bg) */
+  --quil-accent-text: var(--quil-bg);
+
+  /* ---------- Fonts ---------- */
+  --quil-font-ui: 'Inter', system-ui, sans-serif
+  --quil-font-head: 'Archivo', system-ui, sans-serif
+
+  /* ---------- Type scale ---------- */
+  --quil-text-xs: 0.75rem;
+  --quil-text-sm: 0.875rem;
+  --quil-text-base: 1rem;
+  --quil-text-lg: 1.125rem;
+  --quil-text-xl: 1.25rem;
+
+  --quil-heading-1: 2.25rem;
+  --quil-heading-2: 1.875rem;
+  --quil-heading-3: 1.5rem;
+  --quil-heading-4: 1.25rem;
+
+  /* ---------- Spacing ---------- */
+  --quil-space-0-5: 0.125rem;
+  --quil-space-1: 0.25rem;
+  --quil-space-2: 0.5rem;
+  --quil-space-3: 0.75rem;
+  --quil-space-4: 1rem;
+  --quil-space-5: 1.25rem;
+  --quil-space-6: 1.5rem;
+  --quil-space-8: 2rem;
+  --quil-space-10: 2.5rem;
+  --quil-space-12: 3rem;
+  --quil-space-16: 4rem;
+  --quil-space-24: 6rem;
+  --quil-space-2: 0.5rem;
+  --quil-space-3: 0.75rem;
+  --quil-space-4: 1rem;
+  --quil-space-5: 1.25rem;
+  --quil-space-6: 1.5rem;
+  --quil-space-8: 2rem;
+
+  /* ---------- Radius ---------- */
+  --quil-radius-sm: 6px;
+  --quil-radius-md: 10px;
+  --quil-radius-lg: 12px;
+
+  /* ---------- Border width ---------- */
+  --quil-border-width: 1px;
+
+  /* ---------- Shadow — hard 3px edge token ---------- */
+  --quil-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --quil-shadow-2: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --quil-shadow-3: 0 3px 0 rgba(0, 0, 0, 0.35);
+
+  /* ---------- Press distance (mechanical button press) ---------- */
+  --quil-press: 3px;
+  --quil-edge: 0px;
+
+  /* ---------- Duration ---------- */
+  --quil-duration-press: 100ms;
+  --quil-duration-fast: 100ms;
+
+  /* ---------- Minimum touch targets ---------- */
+  --quil-target-min: 44px;
+  --quil-target-icon: 40px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --quil-duration-press: 0ms;
+    --quil-duration-fast: 0ms;
+  }
+}

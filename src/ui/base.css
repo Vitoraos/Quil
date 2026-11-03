@@ -1,0 +1,40 @@
+/* Quil base layer.
+ *
+ * Element-level rules live here; tokens stay pure in tokens.css.
+ * Every value below references a token — no raw colours, sizes or shadows.
+ */
+
+*, *::before, *::after {
+  box-sizing: border-box
+}
+
+html,
+body,
+#root {
+  min-height: 100%
+  margin: 0
+}
+
+body {
+  background: var(--quil-bg)
+  color: var(--quil-text-100)
+  font-family: var(--quil-font-ui)
+  -webkit-font-smoothing: antialiased
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--quil-font-head)
+  margin: 0
+}
+
+:focus-visible {
+  outline: 2px solid var(--quil-accent)
+  outline-offset: 2px
+}
+
+a {
+  color: inherit
+}
