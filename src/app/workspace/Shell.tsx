@@ -30,7 +30,7 @@ export function Shell({ store }: { store: QuilStore }): React.ReactElement {
         }}
       >
         <AIRail />
-        <CanvasCol />
+        <CanvasCol store={store} />
         <DesignRiley store={store} />
       </div>
     </div>
