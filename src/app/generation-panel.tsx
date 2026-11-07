@@ -1,24 +1,28 @@
 // Module E (Phase 6): Generation panel UI.
 // Generate, preview, approve, reject, regenerate loop for targeted edits.
 //
-// The AI outputs component instances that conform to strict ComponentDef
-// schemas ("valid by design"). Quil validates them in code. The user sees
-// variant cards in this panel; tapping one shows a live preview overlay on
-// the canvas; approving commits via apply_candidate through the command bus.
+// The AI (mock provider or BYOK adapter) outputs component instances that
+// conform to strict ComponentDef schemas ("valid by design"). Quil validates
+// them in code. The user sees variant cards in this panel; tapping one shows
+// a live preview overlay on the canvas; approving commits via apply_candidate
+// through the command bus.
 
 import * as React from 'react'
 import { useCallback, useState } from 'react'
-import type { ElementId, PageId, ProjectState } from '../core'
+import type { ElementId, ProjectState } from '../core'
 import { QuilStore } from './store'
 import {
-  buildGenerationContext,
   dedupeCandidates,
   validateCandidate,
   Candidate,
   CandidateValidationResult,
   targetDefs,
-  type TargetType
+  type TargetType,
+  type GenerationContext,
+  buildVariantContext
 } from '../core/generation'
+import { mockProvider } from '../modules/variants/mock-provider'
+import { variantOutputSchema } from '../modules/variants/schemas'
 
 const buttonBase = {
   display: 'inline-flex',
@@ -39,64 +43,6 @@ const buttonBase = {
   cursor: 'pointer'
 } as React.CSSProperties
 
-const buttonDisabled = {
-  ...buttonBase,
-  opacity: 0.5,
-  cursor: 'not-allowed',
-  boxShadow: 'none'
-} as React.CSSProperties
-
-// Mock provider: deterministic candidates for testing.
-// In production this would be replaced by a real AI provider (BYOK).
-const MOCK_CANDIDATES: Record<string, Candidate[]> = {
-  'sec-hero': [
-    {
-      candidateId: 'cand-hero-1' as never,
-      componentDefId: 'hero',
-      targetId: 'sec-hero' as never,
-      props: { bgColor: '#1C1C1A', textColor: '#F5F3EC', padding: { value: 48 } },
-      explanation: 'Dark hero background with light text for contrast'
-    },
-    {
-      candidateId: 'cand-hero-2' as never,
-      componentDefId: 'hero',
-      targetId: 'sec-hero' as never,
-      props: { bgColor: '#F5F5F2', textColor: '#1C1C1A', padding: { value: 32 } },
-      explanation: 'Light hero background with dark text'
-    },
-    {
-      candidateId: 'cand-hero-3' as never,
-      componentDefId: 'hero',
-      targetId: 'sec-hero' as never,
-      props: { bgColor: '#000000', textColor: '#000000', padding: { value: 24 } },
-      explanation: 'Black on black - should fail contrast'
-    }
-  ],
-  'el-hero-cta': [
-    {
-      candidateId: 'cand-btn-1' as never,
-      componentDefId: 'button',
-      targetId: 'el-hero-cta' as never,
-      props: { bgColor: '#7C3AED', textColor: '#F5F3EC', radius: 12, fontWeight: 700 },
-      explanation: 'Violet button with light text, rounded corners'
-    },
-    {
-      candidateId: 'cand-btn-2' as never,
-      componentDefId: 'button',
-      targetId: 'el-hero-cta' as never,
-      props: { bgColor: '#1C1C1A', textColor: '#F5F3EC', radius: 6, fontWeight: 600 },
-      explanation: 'Dark button with light text, moderate radius'
-    },
-    {
-      candidateId: 'cand-btn-3' as never,
-      componentDefId: 'button',
-      targetId: 'el-hero-cta' as never,
-      props: { bgColor: '#F5F3EC', textColor: '#F5F3EC', radius: 999, fontWeight: 9999 },
-      explanation: 'Same color bg/text, invalid radius and fontWeight'
-    }
-  ]
-}
-
 const TARGET_LABELS: Record<TargetType, string> = {
   hero: 'Hero background',
   button: 'Button treatment'
@@ -112,6 +58,8 @@ interface GenerationPanelProps {
   state: ProjectState
   candidates: Candidate[]
   activeIndex: number | null
+  /** How many variants the user asked for (1–3). Caps the candidate list. */
+  variantCount: number
   onGenerate: (candidates: Candidate[], activeIndex: number | null) => void
   onApprove: (candidate: Candidate) => void
   onReject: () => void
@@ -120,14 +68,15 @@ interface GenerationPanelProps {
 }
 
 export function GenerationPanel({
-  store,
+  store: _store,
   state,
   candidates,
   activeIndex,
+  variantCount,
   onGenerate,
   onApprove,
   onReject,
-  onRegenerate,
+  onRegenerate: _onRegenerate,
   onSelectIndex
 }: GenerationPanelProps): React.ReactElement {
   const [targetType, setTargetType] = useState<TargetType>('hero')
@@ -141,27 +90,49 @@ export function GenerationPanel({
   const generateCandidates = useCallback(async (): Promise<void> => {
     setError(null)
 
-    const contextResult = buildGenerationContext(state, currentTargetId, targetType)
+    // Build variant context from the resolved state (decisions, palette, etc.)
+    const contextResult = buildVariantContext(state, currentTargetId, targetType)
     if (!contextResult.ok) {
       setError(contextResult.error.message)
       return
     }
 
     const context = contextResult.context
-    setBaseRev(context.targetRev)
-    setRegistryVersion(context.decisionRegistryVersion)
+    setBaseRev(context.revisions.targetRev)
+    setRegistryVersion(context.revisions.decisionVersion)
 
-    const mockCandidates = MOCK_CANDIDATES[currentTargetId] ?? []
+    // Ask the mock provider for proposals (in production this would be a BYOK adapter)
+    const output = await mockProvider.proposeVariants({
+      context,
+      instruction: null
+    })
+
+    const parsed = variantOutputSchema.safeParse(output)
+    if (!parsed.success) {
+      setError(`Provider returned invalid proposals: ${parsed.error.issues.map((i) => i.message).join(', ')}`)
+      return
+    }
+
+    // Map provider proposals → Candidate commands (app assigns candidateId/targetId)
+    const proposals: Candidate[] = parsed.data.candidates.map((p, i) => ({
+      candidateId: `cand-${Date.now()}-${i}` as never,
+      componentDefId: p.componentDefId,
+      targetId: currentTargetId,
+      props: p.props,
+      explanation: p.explanation
+    }))
 
     // Validate each candidate against the context
     const validated: Array<{ candidate: Candidate; result: CandidateValidationResult }> = []
-    for (const c of mockCandidates) {
-      const result = validateCandidate(context, c, candidates)
+    for (const c of proposals) {
+      const result = validateCandidate(context as unknown as GenerationContext, c, candidates)
       validated.push({ candidate: c, result })
     }
 
     const validCandidates = validated.filter((v) => v.result.ok).map((v) => v.candidate)
-    const nextCandidates = dedupeCandidates(validCandidates.length > 0 ? validCandidates : mockCandidates.slice(0, 3))
+    const nextCandidates = dedupeCandidates(
+      validCandidates.length > 0 ? validCandidates : proposals
+    ).slice(0, variantCount)
 
     const nextValidations = new Map<string, CandidateValidationResult>()
     for (const v of validated) {
@@ -169,18 +140,18 @@ export function GenerationPanel({
     }
 
     onGenerate(nextCandidates, nextCandidates.length > 0 ? 0 : null)
-  }, [state, targetType, currentTargetId, candidates, onGenerate])
+  }, [state, targetType, currentTargetId, candidates, variantCount, onGenerate])
 
   const checkStale = useCallback((): boolean => {
-    const contextResult = buildGenerationContext(state, currentTargetId, targetType)
+    const contextResult = buildVariantContext(state, currentTargetId, targetType)
     if (!contextResult.ok) return false
     const context = contextResult.context
-    const isStale = context.targetRev !== baseRev || context.decisionRegistryVersion !== registryVersion
+    const isStale = context.revisions.targetRev !== baseRev || context.revisions.decisionVersion !== registryVersion
     setStale(isStale)
     return isStale
   }, [state, currentTargetId, targetType, baseRev, registryVersion])
 
-  const handleApprove = useCallback((): void => {
+  const _handleApprove = useCallback((): void => {
     if (activeIndex === null || !candidates[activeIndex]) return
 
     if (checkStale()) {
@@ -202,8 +173,7 @@ export function GenerationPanel({
         display: 'flex',
         flexDirection: 'column',
         gap: 'var(--quil-space-3)',
-        overflow: 'auto',
-        borderLeft: `1px solid var(--quil-line)`
+        overflow: 'auto'
       }}
     >
       <div data-testid="gen-header" style={{ fontWeight: 600, fontSize: 'var(--quil-text-lg)', fontFamily: 'var(--quil-font-head)' }}>
@@ -264,11 +234,11 @@ export function GenerationPanel({
           data-testid="gen-error"
           style={{
             padding: 'var(--quil-space-2) var(--quil-space-3)',
-            background: '#fee2e2',
-            color: '#991b1b',
+            background: 'var(--quil-danger-bg)',
+            color: 'var(--quil-danger-text)',
             borderRadius: 'var(--quil-radius-sm)',
             fontSize: 'var(--quil-text-sm)',
-            border: '1px solid #fecaca',
+            border: '1px solid var(--quil-danger-line)',
             marginBottom: 'var(--quil-space-2)'
           }}
         >
@@ -281,11 +251,11 @@ export function GenerationPanel({
           data-testid="gen-stale"
           style={{
             padding: 'var(--quil-space-2) var(--quil-space-3)',
-            background: '#fef3c7',
-            color: '#92400e',
+            background: 'var(--quil-warning-bg)',
+            color: 'var(--quil-warning-text)',
             borderRadius: 'var(--quil-radius-sm)',
             fontSize: 'var(--quil-text-sm)',
-            border: '1px solid #fcd34d',
+            border: '1px solid var(--quil-warning-line)',
             marginBottom: 'var(--quil-space-2)'
           }}
         >
@@ -300,9 +270,9 @@ export function GenerationPanel({
             Candidates ({candidates.length}) — tap to preview live
           </div>
           {candidates.map((c, i) => {
-            const contextResult = buildGenerationContext(state, currentTargetId, targetType)
+            const contextResult = buildVariantContext(state, currentTargetId, targetType)
             const context = contextResult.ok ? contextResult.context : null
-            const validation = context ? validateCandidate(context, c, candidates) : null
+            const validation = context ? validateCandidate(context as unknown as GenerationContext, c, candidates.filter((o) => o.candidateId !== c.candidateId)) : null
             const isActive = i === activeIndex
 
             return (
@@ -314,6 +284,7 @@ export function GenerationPanel({
                   borderRadius: 'var(--quil-radius-sm)',
                   padding: 'var(--quil-space-2)',
                   background: isActive ? 'var(--quil-surface-hover)' : 'var(--quil-surface)',
+                  boxShadow: 'var(--quil-shadow-3)',
                   cursor: 'pointer',
                   transition: 'border-color var(--quil-duration-fast), background-color var(--quil-duration-fast)',
                   marginBottom: 'var(--quil-space-2)'
@@ -325,10 +296,10 @@ export function GenerationPanel({
                   <span
                     style={{
                       fontSize: 'var(--quil-text-xs)',
-                      padding: '1px 6px',
-                      borderRadius: 4,
-                      background: validation?.ok ? '#dcfce7' : '#fee2e2',
-                      color: validation?.ok ? '#166534' : '#991b1b'
+                      padding: 'var(--quil-space-0-5) var(--quil-space-1)',
+                      borderRadius: 'var(--quil-radius-sm)',
+                      background: validation?.ok ? 'var(--quil-success-bg)' : 'var(--quil-danger-bg)',
+                      color: validation?.ok ? 'var(--quil-success-text)' : 'var(--quil-danger-text)'
                     }}
                   >
                     {validation?.ok ? 'Valid' : 'Invalid'}
@@ -395,7 +366,7 @@ export function GenerationPanel({
                 <div style={{ marginTop: 'var(--quil-space-1)', fontSize: 'var(--quil-text-xs)', color: 'var(--quil-text-70)' }}>
                   {validation?.constraints.map((c) => (
                     <div key={c.name} style={{ display: 'flex', alignItems: 'start', gap: 'var(--quil-space-1)', marginBottom: 'var(--quil-space-0-5)' }}>
-                      <span style={{ color: c.pass ? '#166534' : '#991b1b', fontSize: 'var(--quil-text-xs)' }}>
+                      <span style={{ color: c.pass ? 'var(--quil-success-text)' : 'var(--quil-danger-text)', fontSize: 'var(--quil-text-xs)' }}>
                         {c.pass ? '✓' : '✗'}
                       </span>
                       <span style={{ fontSize: 'var(--quil-text-xs)' }}>{c.message || c.name}</span>

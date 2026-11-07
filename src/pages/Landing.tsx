@@ -72,7 +72,7 @@ export default function Landing(): React.ReactElement {
           repeat it.
         </p>
         <div style={{ display: 'flex', gap: 'var(--quil-space-3)', justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Link to="/signin">
+          <Link to="/new">
             <Button variant="primary">Start designing</Button>
           </Link>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--quil-space-2)' }}>
@@ -391,7 +391,7 @@ export default function Landing(): React.ReactElement {
         <p style={{ color: 'var(--quil-text-70)', marginBottom: 'var(--quil-space-6)' }}>
           Sign in with Google or Apple.
         </p>
-        <Link to="/signin">
+        <Link to="/new">
           <Button variant="primary">Start designing</Button>
         </Link>
       </section>

@@ -2,10 +2,15 @@ import { applyPatches, enableMapSet, enablePatches, produce, produceWithPatches,
 import type {
   AddElementCommand,
   AddPageCommand,
+  AddSectionCommand,
   ApplyCandidateCommand,
+  ApplyIntakeUpdateCommand,
+  ApprovePageSpecCommand,
   BatchCommand,
   CommandError,
-  DesignCommand,
+  ConfirmIntakeCommand,
+  EditIntakeFactCommand,
+  EditPageSpecCommand,
   InstantiateSpecSkeletonCommand,
   LeafCommand,
   MoveElementCommand,
@@ -14,20 +19,30 @@ import type {
   RenamePageCommand,
   SetBriefCommand,
   SetIntakeAnswerCommand,
+  SetIntakeSlotCommand,
   SetPageSpecCommand,
   SetPropertyCommand,
   SetStartingPageCommand,
   UndoCommand
 } from './commands'
 import { designCommandSchema } from './commands'
-import { pageSpecSchema, validatePageSpec } from './specs'
-import { propsSchemas, type ElementKind, type NodeKind } from './elements'
-import type { AssetId, CandidateId, CommandId, ElementId } from './ids'
-import { bounds, type DesignElement, type DecisionScope, type Page, type ProjectState } from './state'
-import type { PageSpec, SpecElement, SpecSection } from './specs'
+import { applySpecOps } from './spec-ops'
+import { validatePageSpec, type PageSpec } from './specs'
+import { propsSchemas, type NodeKind } from './elements'
+import type { AssetId, CommandId, DecisionId, ElementId, FactId, PageId } from './ids'
+import { bounds, type DesignElement, type DecisionScope, type FactTopic, type IntakeFact, type IntakeScope, type Page, type ProjectState, factTopics } from './state'
+import type { SpecElement, SpecSection } from './specs'
 import { upsertDecision } from './decisions'
 import { buildGenerationContext, targetDefs, validateCandidate, type TargetType } from './generation'
 import { validateProject } from './validate'
+import {
+  canContinue,
+  emptySlotValue,
+  slotDefsFor,
+  type AskedQuestion,
+  validateSlotValue,
+  type SlotValue
+} from './intake-schema'
 
 enableMapSet()
 enablePatches()
@@ -168,6 +183,41 @@ function applyAddElementIn(draft: Draft<ProjectState>, cmd: AddElementCommand): 
   return [cmd.elementId, cmd.parentId]
 }
 
+function applyAddSectionIn(draft: Draft<ProjectState>, cmd: AddSectionCommand): ElementId[] {
+  const page = draft.pages.get(cmd.pageId)
+  if (!page) {
+    fail('TARGET_MISSING', 'page-exists', cmd.pageId, `Page ${cmd.pageId} not found`)
+  }
+  if (draft.nodes.has(cmd.sectionId)) {
+    fail('DUPLICATE_ID', 'unique-id', cmd.sectionId, `Element id ${cmd.sectionId} already exists`)
+  }
+
+  const parsedProps = propsSchemas.section.safeParse(cmd.props)
+  if (!parsedProps.success) {
+    fail(
+      'PROPERTY_INVALID',
+      'props-schema',
+      cmd.sectionId,
+      parsedProps.error.issues[0]?.message ?? 'Invalid section props'
+    )
+  }
+
+  const section: DesignElement = {
+    id: cmd.sectionId,
+    kind: 'section',
+    pageId: cmd.pageId,
+    parentId: null,
+    childIds: [],
+    rev: 0,
+    props: parsedProps.data as Record<string, unknown>
+  }
+
+  draft.nodes.set(cmd.sectionId, section)
+  page.sectionIds.push(cmd.sectionId)
+
+  return [cmd.sectionId]
+}
+
 function collectDescendants(nodes: Map<ElementId, DesignElement> | Draft<Map<ElementId, DesignElement>>, rootId: ElementId): ElementId[] {
   const result: ElementId[] = []
   const stack = [rootId]
@@ -285,7 +335,559 @@ function applyMoveElementIn(draft: Draft<ProjectState>, cmd: MoveElementCommand)
   return oldParentId ? [cmd.elementId, oldParentId, cmd.newParentId] : [cmd.elementId, cmd.newParentId]
 }
 
-function applyCandidateIn(draft: Draft<ProjectState>, cmd: ApplyCandidateCommand): ElementId[] {
+function applySetBriefIn(draft: Draft<ProjectState>, cmd: SetBriefCommand): ElementId[] {
+  if (cmd.brief.length > bounds.maxBriefLength) {
+    fail('BOUNDS_EXCEEDED', 'brief-length', 'brief', `Brief exceeds ${bounds.maxBriefLength} characters`)
+  }
+  draft.brief = cmd.brief
+  return []
+}
+
+function applySetIntakeAnswerIn(draft: Draft<ProjectState>, cmd: SetIntakeAnswerCommand): ElementId[] {
+  if (draft.intakeAnswers.size >= bounds.maxIntakeAnswers && !draft.intakeAnswers.has(cmd.questionId)) {
+    fail('BOUNDS_EXCEEDED', 'intake-answers', 'intakeAnswers', `Too many intake answers (max ${bounds.maxIntakeAnswers})`)
+  }
+  draft.intakeAnswers.set(cmd.questionId, cmd.answer)
+  return []
+}
+
+function applyApplyIntakeUpdateIn(draft: Draft<ProjectState>, cmd: ApplyIntakeUpdateCommand): ElementId[] {
+  // Idempotent on turnId: replaying the same turn leaves state unchanged.
+  if (draft.seenTurnIds.includes(cmd.turnId)) {
+    return []
+  }
+
+  const scope: IntakeScope = cmd.scope ?? { kind: 'project' }
+  const defs = slotDefsFor(scope)
+
+  // Helper: resolve the slot store for the given scope, creating a page
+  // intake entry lazily when needed.
+  const slotStore = (): Map<string, SlotValue> => {
+    if (scope.kind === 'page') {
+      let pi = draft.pageIntake.get(scope.pageId)
+      if (!pi) {
+        pi = { slots: new Map(), facts: new Map() }
+        draft.pageIntake.set(scope.pageId, pi)
+      }
+      return pi.slots
+    }
+    return draft.intake
+  }
+
+  // Helper: resolve the fact store for the given scope.
+  const factStore = (): Map<FactId, IntakeFact> => {
+    if (scope.kind === 'page') {
+      let pi = draft.pageIntake.get(scope.pageId)
+      if (!pi) {
+        pi = { slots: new Map(), facts: new Map() }
+        draft.pageIntake.set(scope.pageId, pi)
+      }
+      return pi.facts
+    }
+    return draft.facts
+  }
+
+  // Validate and apply slot updates.
+  for (const update of cmd.updates) {
+    const def = defs[update.slot]
+    if (!def) {
+      fail(
+        'PROPERTY_UNKNOWN',
+        'slot-allowlist',
+        update.slot,
+        `Unknown intake slot '${update.slot}' for scope ${scope.kind}`
+      )
+    }
+
+    const parsed = validateSlotValue(def, update.value)
+    if (!parsed.ok) {
+      fail('PROPERTY_INVALID', 'slot-value', update.slot, parsed.message)
+    }
+
+    const slots = slotStore()
+    const existing = slots.get(update.slot) ?? emptySlotValue()
+    const next: SlotValue = {
+      value: parsed.data,
+      basis: update.basis,
+      confidence: update.confidence,
+      evidence: update.evidence,
+      turnId: cmd.turnId,
+      asked: existing.asked,
+      superseded: [...existing.superseded]
+    }
+
+    // Never silently overwrite a stated value: keep up to three superseded.
+    if (existing.basis === 'stated' && update.basis === 'stated' && existing.value !== undefined) {
+      pushBounded(next.superseded, existing, 3)
+    }
+
+    slots.set(update.slot, next)
+  }
+
+  // Validate and apply facts (max 6 per turn, already bounded by schema).
+  const factsToApply = cmd.facts ?? []
+  for (const fact of factsToApply) {
+    if (!factTopics.includes(fact.topic as FactTopic)) {
+      fail('PROPERTY_INVALID', 'fact-topic', fact.id, `Unknown fact topic '${fact.topic}'`)
+    }
+    if (fact.question.length < 1 || fact.question.length > 280) {
+      fail('PROPERTY_INVALID', 'fact-question', fact.id, 'Fact question must be 1..280 chars')
+    }
+    if (fact.answer.length < 1 || fact.answer.length > bounds.maxFactAnswer) {
+      fail('PROPERTY_INVALID', 'fact-answer', fact.id, `Fact answer must be 1..${bounds.maxFactAnswer} chars`)
+    }
+    if (fact.confidence < 0 || fact.confidence > 1 || !Number.isFinite(fact.confidence)) {
+      fail('PROPERTY_INVALID', 'fact-confidence', fact.id, 'Fact confidence must be 0..1')
+    }
+    if (fact.evidence !== 'user' && cmd.userText && !cmd.userText.includes(fact.evidence)) {
+      fail('PROPERTY_INVALID', 'fact-evidence', fact.id, 'Fact evidence must be an exact substring of the user turn')
+    }
+    if (fact.superseded.length > 3) {
+      fail('BOUNDS_EXCEEDED', 'fact-superseded', fact.id, 'Fact superseded history exceeds 3')
+    }
+
+    const facts = factStore()
+    const existing = facts.get(fact.id)
+    const next: IntakeFact = {
+      id: fact.id,
+      topic: fact.topic as FactTopic,
+      question: fact.question,
+      answer: fact.answer,
+      basis: fact.basis,
+      confidence: fact.confidence,
+      evidence: fact.evidence,
+      turnId: fact.turnId,
+      superseded: [...(existing?.superseded ?? [])]
+    }
+
+    // Never silently overwrite a stated value: keep up to three superseded.
+    if (existing && existing.basis === 'stated' && fact.basis === 'stated' && existing.answer !== undefined) {
+      pushBounded(next.superseded, { answer: existing.answer, basis: existing.basis, turnId: existing.turnId }, 3)
+    }
+
+    facts.set(fact.id, next)
+  }
+
+  // Reject if total facts would exceed maxFacts.
+  if (factStore().size > bounds.maxFacts) {
+    fail('BOUNDS_EXCEEDED', 'fact-count', 'facts', `Too many facts (max ${bounds.maxFacts})`)
+  }
+
+  // Increment asked counts for slots the orchestrator just asked about.
+  const slots = slotStore()
+  for (const slotKey of cmd.askedSlots) {
+    const slot = slots.get(slotKey)
+    if (slot) {
+      slot.asked = Math.min(slot.asked + 1, 2)
+    } else {
+      slots.set(slotKey, { ...emptySlotValue(), asked: 1 })
+    }
+  }
+
+  pushBounded(draft.seenTurnIds, cmd.turnId, bounds.maxSeenTurnIds)
+
+  draft.intakeRev = draft.intakeRev + 1
+
+  // Record the turn for memory/history (Part 4.4). Keep at most 50.
+  // A turn is recorded even when updates and facts are empty, so user text
+  // is never lost.
+  const turnScope: 'project' | PageId = scope.kind === 'project' ? 'project' : scope.pageId
+  draft.turnRecords = pushBoundedArray(draft.turnRecords, {
+    turnId: cmd.turnId,
+    askedSlots: [...cmd.askedSlots],
+    userText: cmd.userText,
+    scope: turnScope,
+    asked: (cmd.asked ?? undefined) as AskedQuestion | undefined,
+    acceptedUpdates: cmd.updates.map((u) => ({
+      slot: u.slot,
+      value: u.value,
+      basis: u.basis,
+      confidence: u.confidence,
+      evidence: u.evidence
+    }))
+  }, bounds.maxTurnRecords)
+
+  return []
+}
+
+function applySetIntakeSlotIn(draft: Draft<ProjectState>, cmd: SetIntakeSlotCommand): ElementId[] {
+  const scope: IntakeScope = cmd.scope
+  const defs = slotDefsFor(scope)
+  const def = defs[cmd.slot]
+  if (!def) {
+    fail('PROPERTY_UNKNOWN', 'slot-allowlist', cmd.slot, `Unknown intake slot '${cmd.slot}' for scope ${scope.kind}`)
+  }
+
+  const parsed = validateSlotValue(def, cmd.value)
+  if (!parsed.ok) {
+    fail('PROPERTY_INVALID', 'slot-value', cmd.slot, parsed.message)
+  }
+
+  const slots = ((): Map<string, SlotValue> => {
+    if (scope.kind === 'page') {
+      let pi = draft.pageIntake.get(scope.pageId)
+      if (!pi) {
+        pi = { slots: new Map(), facts: new Map() }
+        draft.pageIntake.set(scope.pageId, pi)
+      }
+      return pi.slots
+    }
+    return draft.intake
+  })()
+
+  const existing = slots.get(cmd.slot) ?? emptySlotValue()
+  const next: SlotValue = {
+    value: parsed.data,
+    basis: 'stated',
+    confidence: 1,
+    evidence: 'user',
+    turnId: null,
+    asked: existing.asked,
+    superseded: [...existing.superseded]
+  }
+
+  // Never silently overwrite a stated value: keep up to three superseded.
+  if (existing.basis === 'stated' && existing.value !== undefined) {
+    pushBounded(next.superseded, existing, 3)
+  }
+
+  slots.set(cmd.slot, next)
+  draft.intakeRev = draft.intakeRev + 1
+  return []
+}
+
+function applyEditIntakeFactIn(draft: Draft<ProjectState>, cmd: EditIntakeFactCommand): ElementId[] {
+  const scope: IntakeScope = cmd.scope
+
+  // null answer deletes the fact.
+  if (cmd.answer === null) {
+    const facts = ((): Map<FactId, IntakeFact> => {
+      if (scope.kind === 'page') {
+        const pi = draft.pageIntake.get(scope.pageId)
+        return pi ? pi.facts : new Map()
+      }
+      return draft.facts
+    })()
+    if (!facts.has(cmd.factId)) {
+      fail('TARGET_MISSING', 'fact-exists', cmd.factId, `Fact ${cmd.factId} not found`)
+    }
+    facts.delete(cmd.factId)
+    draft.intakeRev = draft.intakeRev + 1
+    return []
+  }
+
+  // Validate the new answer.
+  if (cmd.answer.length < 1 || cmd.answer.length > bounds.maxFactAnswer) {
+    fail('PROPERTY_INVALID', 'fact-answer', cmd.factId, `Fact answer must be 1..${bounds.maxFactAnswer} chars`)
+  }
+
+  const facts = ((): Map<FactId, IntakeFact> => {
+    if (scope.kind === 'page') {
+      let pi = draft.pageIntake.get(scope.pageId)
+      if (!pi) {
+        pi = { slots: new Map(), facts: new Map() }
+        draft.pageIntake.set(scope.pageId, pi)
+      }
+      return pi.facts
+    }
+    return draft.facts
+  })()
+
+  const existing = facts.get(cmd.factId)
+  const next: IntakeFact = {
+    id: cmd.factId,
+    topic: existing?.topic ?? 'product',
+    question: existing?.question ?? 'Edited fact',
+    answer: cmd.answer,
+    basis: 'stated',
+    confidence: existing?.confidence ?? 1,
+    evidence: 'user',
+    turnId: null,
+    superseded: [...(existing?.superseded ?? [])]
+  }
+
+  // Edited facts become stated; keep prior stated value as superseded.
+  if (existing && existing.basis === 'stated' && existing.answer !== undefined) {
+    pushBounded(next.superseded, { answer: existing.answer, basis: existing.basis, turnId: existing.turnId }, 3)
+  }
+
+  facts.set(cmd.factId, next)
+  draft.intakeRev = draft.intakeRev + 1
+  return []
+}
+
+function applyConfirmIntakeIn(draft: Draft<ProjectState>, cmd: ConfirmIntakeCommand): ElementId[] {
+  const scope: IntakeScope = cmd.scope
+
+  if (scope.kind === 'project') {
+    // Idempotent: already confirmed.
+    if (draft.intakeStatus.project === 'confirmed') {
+      return []
+    }
+    if (!canContinue(draft, scope)) {
+      fail(
+        'INVALID_COMMAND',
+        'precondition',
+        'intake',
+        'Cannot confirm project intake: purpose must be stated and pages must have at least one entry'
+      )
+    }
+    draft.intakeStatus.project = 'confirmed'
+  } else {
+    const pageStatus = draft.intakeStatus.pages.get(scope.pageId)
+    if (pageStatus === 'confirmed') {
+      return []
+    }
+    if (!canContinue(draft, scope)) {
+      fail(
+        'INVALID_COMMAND',
+        'precondition',
+        'intake',
+        'Cannot confirm page intake: purpose must be stated'
+      )
+    }
+    draft.intakeStatus.pages.set(scope.pageId, 'confirmed')
+  }
+
+  draft.intakeRev = draft.intakeRev + 1
+  return []
+}
+
+function applyEditPageSpecIn(draft: Draft<ProjectState>, cmd: EditPageSpecCommand): ElementId[] {
+  const page = draft.pages.get(cmd.pageId)
+  if (!page) {
+    fail('TARGET_MISSING', 'page-exists', cmd.pageId, `Page ${cmd.pageId} not found`)
+  }
+
+  const existingSpec = draft.pageSpecs.get(cmd.pageId)
+  if (!existingSpec) {
+    fail('TARGET_MISSING', 'spec-missing', cmd.pageId, `No page spec for ${cmd.pageId}`)
+  }
+
+  // STALE_SPEC: baseSpecVersion must match current spec version.
+  if (existingSpec.version !== cmd.baseSpecVersion) {
+    fail(
+      'STALE_SPEC',
+      'spec-version',
+      cmd.pageId,
+      `Spec baseSpecVersion ${cmd.baseSpecVersion} does not match current version ${existingSpec.version}`
+    )
+  }
+
+  // Apply ops atomically.
+  const result = applySpecOps(existingSpec, cmd.ops)
+  if (!result.ok) {
+    fail(
+      'SPEC_OP_FAILED',
+      'spec-op',
+      `opIndex:${result.error.opIndex}`,
+      result.error.message
+    )
+  }
+
+  // If the page has a skeleton, check whether removing sections/elements
+  // would orphan approved instance decisions. If so and confirmOrphans is
+  // not true, fail with CONFLICT_NEEDS_CONFIRMATION listing the decision ids.
+  const removedElementIds: ElementId[] = []
+  for (const op of cmd.ops) {
+    if (op.op === 'remove_section') {
+      const section = existingSpec.sections.find((s) => s.key === op.key)
+      if (section) {
+        for (const el of section.elements) {
+          if (el.elementId) removedElementIds.push(el.elementId)
+        }
+      }
+    } else if (op.op === 'remove_element') {
+      const section = existingSpec.sections.find((s) => s.key === op.sectionKey)
+      const el = section?.elements.find((e) => e.key === op.key)
+      if (el?.elementId) removedElementIds.push(el.elementId)
+    }
+  }
+
+  if (removedElementIds.length > 0) {
+    const orphanedDecisionIds: DecisionId[] = []
+    for (const [id, dec] of draft.decisions) {
+      if (
+        dec.scope.kind === 'instance' &&
+        removedElementIds.includes(dec.scope.elementId) &&
+        dec.status === 'approved'
+      ) {
+        orphanedDecisionIds.push(id)
+      }
+    }
+    if (orphanedDecisionIds.length > 0 && !cmd.confirmOrphans) {
+      fail(
+        'CONFLICT_NEEDS_CONFIRMATION',
+        'spec-conflict',
+        cmd.pageId,
+        `Edit would orphan approved decisions: ${orphanedDecisionIds.join(', ')}`
+      )
+    }
+  }
+
+  const nextSpec: PageSpec = {
+    ...(result.spec as PageSpec),
+    pageId: cmd.pageId,
+    version: existingSpec.version + 1,
+    status: existingSpec.status,
+    basedOnIntakeRev: existingSpec.basedOnIntakeRev ?? 0
+  }
+  draft.pageSpecs.set(cmd.pageId, nextSpec)
+  draft.intakeRev = draft.intakeRev + 1
+  return [cmd.pageId as unknown as ElementId]
+}
+
+function applyApprovePageSpecIn(draft: Draft<ProjectState>, cmd: ApprovePageSpecCommand): ElementId[] {
+  const existingSpec = draft.pageSpecs.get(cmd.pageId)
+
+  // Idempotent: already approved at this version.
+  if (existingSpec?.status === 'approved' && existingSpec.version === cmd.baseSpecVersion) {
+    return []
+  }
+
+  const page = draft.pages.get(cmd.pageId)
+  if (!page) {
+    fail('TARGET_MISSING', 'page-exists', cmd.pageId, `Page ${cmd.pageId} not found`)
+  }
+
+  if (!existingSpec) {
+    fail('TARGET_MISSING', 'spec-missing', cmd.pageId, `No page spec for ${cmd.pageId}`)
+  }
+
+  // STALE_SPEC: baseSpecVersion must match current spec version.
+  if (existingSpec.version !== cmd.baseSpecVersion) {
+    fail(
+      'STALE_SPEC',
+      'spec-version',
+      cmd.pageId,
+      `Spec baseSpecVersion ${cmd.baseSpecVersion} does not match current version ${existingSpec.version}`
+    )
+  }
+
+  // Structural validation (hard errors).
+  const errors = validatePageSpec(existingSpec)
+  if (errors.length > 0) {
+    fail('PROPERTY_INVALID', 'spec-validation', cmd.pageId, errors.join('; '))
+  }
+
+  const nextSpec: PageSpec = {
+    ...existingSpec,
+    status: 'approved',
+    version: existingSpec.version + 1
+  }
+  draft.pageSpecs.set(cmd.pageId, nextSpec)
+  draft.intakeRev = draft.intakeRev + 1
+
+  // Reconcile skeleton: instantiate only missing nodes, never reset existing.
+  applyInstantiateSpecSkeletonIn(draft, {
+    type: 'instantiate_spec_skeleton',
+    commandId: cmd.commandId,
+    baseRev: draft.rev,
+    pageId: cmd.pageId
+  })
+
+  return [cmd.pageId as unknown as ElementId]
+}
+
+function applyInstantiateSpecSkeletonIn(draft: Draft<ProjectState>, cmd: InstantiateSpecSkeletonCommand): ElementId[] {
+  const page = draft.pages.get(cmd.pageId)
+  if (!page) {
+    fail('TARGET_MISSING', 'page-exists', cmd.pageId, `Page ${cmd.pageId} not found`)
+  }
+
+  const spec = draft.pageSpecs.get(cmd.pageId)
+  if (!spec) {
+    fail('TARGET_MISSING', 'spec-missing', cmd.pageId, `No page spec for ${cmd.pageId}`)
+  }
+
+  const created: ElementId[] = []
+
+  for (const section of spec.sections) {
+    // Assign deterministic section id.
+    const sectionElementId = `sec-${spec.pageId}-${section.key}` as ElementId
+
+    // Idempotent reconcile: only create if missing. Never reset existing
+    // props or children on a second run.
+    let sectionNode = draft.nodes.get(sectionElementId)
+    if (!sectionNode) {
+      sectionNode = {
+        id: sectionElementId,
+        kind: 'section',
+        pageId: cmd.pageId,
+        parentId: null,
+        childIds: [],
+        rev: 0,
+        props: { bgColor: '#ECECE8', padding: { value: 24 } }
+      }
+      draft.nodes.set(sectionElementId, sectionNode)
+      if (!page.sectionIds.includes(sectionElementId)) {
+        page.sectionIds.push(sectionElementId)
+      }
+      created.push(sectionElementId)
+    }
+
+    for (const element of section.elements) {
+      // Reuse existing elementId from spec trace if present and node exists,
+      // otherwise assign a deterministic id.
+      let elementId: ElementId
+      if (element.elementId && draft.nodes.has(element.elementId)) {
+        elementId = element.elementId
+      } else {
+        elementId = `el-${spec.pageId}-${section.key}-${element.key}` as ElementId
+        let suffix = 2
+        while (draft.nodes.has(elementId)) {
+          elementId = `el-${spec.pageId}-${section.key}-${element.key}-${suffix}` as ElementId
+          suffix += 1
+        }
+      }
+
+      let elementNode = draft.nodes.get(elementId)
+      if (!elementNode) {
+        const props = defaultSkeletonProps(element.kind, element.purpose)
+
+        // For images, create a placeholder asset.
+        if (element.kind === 'image') {
+          const assetId = `asset-${spec.pageId}-${element.key}` as AssetId
+          draft.assets.set(assetId, {
+            id: assetId,
+            kind: 'image',
+            width: 800,
+            height: 600,
+            alt: element.purpose
+          })
+          props.assetId = assetId
+        }
+
+        elementNode = {
+          id: elementId,
+          kind: element.kind,
+          pageId: cmd.pageId,
+          parentId: sectionElementId,
+          childIds: [],
+          rev: 0,
+          props
+        }
+        draft.nodes.set(elementId, elementNode)
+        created.push(elementId)
+      }
+
+      // Ensure the element is a child of its section (idempotent).
+      if (!sectionNode.childIds.includes(elementId)) {
+        sectionNode.childIds.push(elementId)
+      }
+
+      // Record elementId into the spec trace.
+      const specEl = spec.sections.find((s) => s.key === section.key)?.elements.find((e) => e.key === element.key)
+      if (specEl && specEl.elementId !== elementId) {
+        specEl.elementId = elementId
+      }
+    }
+  }
+
+  return created
+}
+
+function applyApplyCandidateIn(draft: Draft<ProjectState>, cmd: ApplyCandidateCommand): ElementId[] {
   const node = draft.nodes.get(cmd.targetId)
   if (!node) {
     fail('TARGET_MISSING', 'element-exists', cmd.targetId, `Candidate target ${cmd.targetId} not found`)
@@ -320,8 +922,9 @@ function applyCandidateIn(draft: Draft<ProjectState>, cmd: ApplyCandidateCommand
     fail('CANDIDATE_INVALID', 'candidate-validation', cmd.candidateId, validation.errors.join('; '))
   }
 
-  // An approval is a decision: record it at instance scope, never patch base props.
-  const scope: DecisionScope = { kind: 'instance', elementId: cmd.targetId }
+  // An approval is a decision: record it at the command's scope (default
+  // instance). Section targets stay instance-only.
+  const scope: DecisionScope = cmd.scope ?? { kind: 'instance', elementId: cmd.targetId }
   for (const patch of cmd.patches) {
     applySetPropertyIn(draft, {
       type: 'set_property',
@@ -338,20 +941,13 @@ function applyCandidateIn(draft: Draft<ProjectState>, cmd: ApplyCandidateCommand
   return [cmd.targetId]
 }
 
-function applySetBriefIn(draft: Draft<ProjectState>, cmd: SetBriefCommand): ElementId[] {
-  if (cmd.brief.length > bounds.maxBriefLength) {
-    fail('BOUNDS_EXCEEDED', 'brief-length', 'brief', `Brief exceeds ${bounds.maxBriefLength} characters`)
+function pushBoundedArray<T>(arr: T[], item: T, max: number): T[] {
+  const next = [...arr]
+  next.push(item)
+  if (next.length > max) {
+    next.shift()
   }
-  draft.brief = cmd.brief
-  return []
-}
-
-function applySetIntakeAnswerIn(draft: Draft<ProjectState>, cmd: SetIntakeAnswerCommand): ElementId[] {
-  if (draft.intakeAnswers.size >= bounds.maxIntakeAnswers && !draft.intakeAnswers.has(cmd.questionId)) {
-    fail('BOUNDS_EXCEEDED', 'intake-answers', 'intakeAnswers', `Too many intake answers (max ${bounds.maxIntakeAnswers})`)
-  }
-  draft.intakeAnswers.set(cmd.questionId, cmd.answer)
-  return []
+  return next
 }
 
 function applyAddPageIn(draft: Draft<ProjectState>, cmd: AddPageCommand): ElementId[] {
@@ -453,102 +1049,22 @@ function applySetPageSpecIn(draft: Draft<ProjectState>, cmd: SetPageSpecCommand)
     newSections.push({ ...section, elements: newElements })
   }
 
+  // Allowed only while the existing spec (if any) is draft; for approved specs
+  // use edit_page_spec.
+  if (existingSpec && existingSpec.status === 'approved') {
+    fail('INVALID_COMMAND', 'spec-approved', cmd.pageId, `Spec for ${cmd.pageId} is already approved; use edit_page_spec`)
+  }
+
   draft.pageSpecs.set(cmd.pageId, {
     pageId: cmd.pageId,
     name: cmd.spec.name,
     purpose: cmd.spec.purpose,
     version: (existingSpec?.version ?? 0) + 1,
+    status: 'draft',
+    basedOnIntakeRev: draft.intakeRev,
     sections: newSections
   })
   return [cmd.pageId as unknown as ElementId]
-}
-
-function applyInstantiateSpecSkeletonIn(draft: Draft<ProjectState>, cmd: InstantiateSpecSkeletonCommand): ElementId[] {
-  const page = draft.pages.get(cmd.pageId)
-  if (!page) {
-    fail('TARGET_MISSING', 'page-exists', cmd.pageId, `Page ${cmd.pageId} not found`)
-  }
-
-  const spec = draft.pageSpecs.get(cmd.pageId)
-  if (!spec) {
-    fail('TARGET_MISSING', 'spec-missing', cmd.pageId, `No page spec for ${cmd.pageId}`)
-  }
-
-  const created: ElementId[] = []
-
-  for (const section of spec.sections) {
-    // Assign deterministic section id
-    const sectionElementId = `sec-${spec.pageId}-${section.key}` as ElementId
-
-    const sectionNode: DesignElement = {
-      id: sectionElementId,
-      kind: 'section',
-      pageId: cmd.pageId,
-      parentId: null,
-      childIds: [],
-      rev: 0,
-      props: { bgColor: '#F5F5F2', padding: { value: 24 } }
-    }
-    draft.nodes.set(sectionElementId, sectionNode)
-    if (!page.sectionIds.includes(sectionElementId)) {
-      page.sectionIds.push(sectionElementId)
-    }
-    created.push(sectionElementId)
-
-    for (const element of section.elements) {
-      // Reuse existing elementId from spec trace if present, otherwise assign
-      let elementId: ElementId
-      if (element.elementId && draft.nodes.has(element.elementId)) {
-        elementId = element.elementId
-      } else {
-        elementId = `el-${spec.pageId}-${section.key}-${element.key}` as ElementId
-        // Resolve collisions deterministically
-        let suffix = 2
-        while (draft.nodes.has(elementId)) {
-          elementId = `el-${spec.pageId}-${section.key}-${element.key}-${suffix}` as ElementId
-          suffix++
-        }
-      }
-
-      const props = defaultSkeletonProps(element.kind, element.purpose)
-
-      // For images, create a placeholder asset
-      if (element.kind === 'image') {
-        const assetId = `asset-${spec.pageId}-${element.key}` as AssetId
-        draft.assets.set(assetId, {
-          id: assetId,
-          kind: 'image',
-          width: 800,
-          height: 600,
-          alt: element.purpose
-        })
-        props.assetId = assetId
-      }
-
-      const elementNode: DesignElement = {
-        id: elementId,
-        kind: element.kind,
-        pageId: cmd.pageId,
-        parentId: sectionElementId,
-        childIds: [],
-        rev: 0,
-        props
-      }
-      draft.nodes.set(elementId, elementNode)
-      if (!sectionNode.childIds.includes(elementId)) {
-        sectionNode.childIds.push(elementId)
-      }
-      created.push(elementId)
-
-      // Record elementId into the spec trace
-      const specEl = spec.sections.find((s) => s.key === section.key)?.elements.find((e) => e.key === element.key)
-      if (specEl && specEl.elementId !== elementId) {
-        specEl.elementId = elementId
-      }
-    }
-  }
-
-  return created
 }
 
 function defaultSkeletonProps(kind: NodeKind, purpose: string): Record<string, unknown> {
@@ -572,16 +1088,26 @@ function applyLeaf(draft: Draft<ProjectState>, cmd: LeafCommand): ElementId[] {
       return applySetPropertyIn(draft, cmd)
     case 'add_element':
       return applyAddElementIn(draft, cmd)
+    case 'add_section':
+      return applyAddSectionIn(draft, cmd)
     case 'remove_element':
       return applyRemoveElementIn(draft, cmd)
     case 'move_element':
       return applyMoveElementIn(draft, cmd)
     case 'apply_candidate':
-      return applyCandidateIn(draft, cmd)
+      return applyApplyCandidateIn(draft, cmd)
     case 'set_brief':
       return applySetBriefIn(draft, cmd)
     case 'set_intake_answer':
       return applySetIntakeAnswerIn(draft, cmd)
+    case 'apply_intake_update':
+      return applyApplyIntakeUpdateIn(draft, cmd)
+    case 'set_intake_slot':
+      return applySetIntakeSlotIn(draft, cmd)
+    case 'edit_intake_fact':
+      return applyEditIntakeFactIn(draft, cmd)
+    case 'confirm_intake':
+      return applyConfirmIntakeIn(draft, cmd)
     case 'add_page':
       return applyAddPageIn(draft, cmd)
     case 'remove_page':
@@ -592,11 +1118,22 @@ function applyLeaf(draft: Draft<ProjectState>, cmd: LeafCommand): ElementId[] {
       return applySetStartingPageIn(draft, cmd)
     case 'set_page_spec':
       return applySetPageSpecIn(draft, cmd)
+    case 'edit_page_spec':
+      return applyEditPageSpecIn(draft, cmd)
+    case 'approve_page_spec':
+      return applyApprovePageSpecIn(draft, cmd)
     case 'instantiate_spec_skeleton':
       return applyInstantiateSpecSkeletonIn(draft, cmd)
     case 'undo':
     case 'redo':
       return []
+    default:
+      return fail(
+        'INVALID_COMMAND',
+        'unhandled-command',
+        (cmd as { type: string }).type,
+        `No reducer registered for command type '${(cmd as { type: string }).type}'`
+      )
   }
 }
 

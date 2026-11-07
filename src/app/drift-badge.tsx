@@ -46,13 +46,13 @@ export function DriftBadge({
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 6,
-        padding: '4px 8px',
-        background: '#fef3c7',
-        border: '1px solid #d97706',
-        borderRadius: 6,
-        fontSize: 12,
-        color: '#92400e'
+        gap: 'var(--quil-space-1)',
+        padding: 'var(--quil-space-1) var(--quil-space-2)',
+        background: 'var(--quil-warning-bg)',
+        border: `var(--quil-border-width) solid var(--quil-warning-border)`,
+        borderRadius: 'var(--quil-radius-sm)',
+        fontSize: 'var(--quil-text-xs)',
+        color: 'var(--quil-warning-text)'
       }}
     >
       <span>Drift: hand edit differs from approved decision</span>

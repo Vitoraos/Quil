@@ -2,14 +2,12 @@
 // Projects page: list projects, start a new one.
 
 import * as React from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useNavigate } from 'react-router-dom'
 import { Button, Card, FeatherPen, StatusMessage } from '../ui'
 import { projectRepository } from '../persistence'
 
 export default function Projects(): React.ReactElement {
   const navigate = useNavigate()
-  const { user } = useAuth()
   const [projects, setProjects] = React.useState<Array<{ id: string; name: string; updatedAt: string }>>([])
   const [loading, setLoading] = React.useState(true)
 
@@ -54,11 +52,6 @@ export default function Projects(): React.ReactElement {
           <span style={{ fontSize: 'var(--quil-heading-2)', fontFamily: 'var(--quil-font-head)' }}>Quil</span>
         </div>
         <span style={{ flex: 1 }} />
-        {user && (
-          <span style={{ fontSize: 'var(--quil-text-sm)', color: 'var(--quil-text-70)' }}>
-            {user.email}
-          </span>
-        )}
       </header>
 
       <div style={{ padding: 'var(--quil-space-8)' }}>

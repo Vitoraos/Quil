@@ -1,6 +1,5 @@
 import type { DesignDecision, DesignElement, ProjectState } from '../state'
-import type { ElementId, DecisionId, PageId } from '../ids'
-import type { NodeKind } from '../elements'
+import type { ElementId, DecisionId } from '../ids'
 
 export interface ResolvedProps {
   props: Record<string, unknown>

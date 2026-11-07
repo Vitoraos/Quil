@@ -37,7 +37,7 @@ describe('decision resolver oracle: incremental resolve == full resolve', () => 
     const ids = ['el-hero-heading', 'el-hero-text', 'el-hero-cta', 'sec-hero', 'el-footer-copy']
 
     let divergenceCount = 0
-    let seq = 0
+    let _seq = 0
 
     for (let sequence = 0; sequence < 10000; sequence++) {
       const state = referenceProject()
@@ -48,7 +48,7 @@ describe('decision resolver oracle: incremental resolve == full resolve', () => 
         const pickProp = propPool[Math.floor(rand() * propPool.length)]
         const pickValue = valuePool[Math.floor(rand() * valuePool.length)]
         const pickScope = scopePool[Math.floor(rand() * scopePool.length)]
-        const pickKind = kindsPool[Math.floor(rand() * kindsPool.length)]
+        const _pickKind = kindsPool[Math.floor(rand() * kindsPool.length)]
 
         const res = applyCommand(state, {
           type: 'set_property',
@@ -63,7 +63,7 @@ describe('decision resolver oracle: incremental resolve == full resolve', () => 
         if (!res.ok) continue
 
         // Build full resolve (no memo) vs memoized resolve for every element
-        const fullMemo = createResolverMemo()
+        const _fullMemo = createResolverMemo()
         const memoizedMemo = createResolverMemo()
         let divergent = false
 
@@ -88,7 +88,7 @@ describe('decision resolver oracle: incremental resolve == full resolve', () => 
           divergenceCount++
           break
         }
-        seq++
+        _seq++
       }
     }
 

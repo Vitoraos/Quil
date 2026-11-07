@@ -2,6 +2,8 @@ import * as React from 'react'
 import { useSyncExternalStore } from 'react'
 import type { ElementId, ProjectState } from '../core'
 import { QuilStore } from './store'
+import { newCommandId } from './command-id'
+import { resolveElement } from '../core/decisions/resolver'
 
 export function ScopePicker({
   store,
@@ -31,8 +33,6 @@ export function ScopePicker({
     }
   }
 
-  const instanceCount = 1
-
   const meaningful =
     kind === 'section'
       ? [{ kind: 'instance' as const, elementId, label: 'This element only' }]
@@ -43,20 +43,27 @@ export function ScopePicker({
         ]
 
   return (
-    <div data-testid="scope-picker" style={{ padding: 8, fontSize: 12 }}>
+    <div data-testid="scope-picker" style={{ padding: 'var(--quil-space-2)', fontSize: 'var(--quil-text-xs)' }}>
       <div>Apply <b>{property}</b> to:</div>
       {meaningful.map((scope) => (
         <button
           key={JSON.stringify(scope)}
           data-scope={scope.kind}
           onClick={() => {
+            // Resolve the current value for this property so the dispatched
+            // decision carries the resolved (not base) value. This ensures a
+            // scope change preserves the user's current visual state.
+            const resolved = resolveElement(state, elementId)
+            const resolvedValue = resolved.ok
+              ? resolved.result.props[property]
+              : (element.props as Record<string, unknown>)[property]
             store.dispatch({
               type: 'set_property',
-              commandId: `cmd-scope-${Date.now()}` as never,
+              commandId: newCommandId('scope'),
               baseRev: state.rev,
               targetId: elementId,
               property,
-              value: (element.props as Record<string, unknown>)[property],
+              value: resolvedValue,
               scope: scope as never
             })
           }}

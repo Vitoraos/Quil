@@ -6,11 +6,13 @@
 
 import * as React from 'react'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import type { DesignElement, ElementId, NodeKind, PageId, ProjectState, ResolvedProps } from '../core'
+import type { ElementId, NodeKind, PageId, ProjectState } from '../core'
 import { QuilStore } from './store'
 import { createResolver } from './resolve'
 import { Layers } from './layers'
 import { attachGestures } from './gestures'
+import { SelectionOverlay } from './selection-overlay'
+import { TextEditor } from './text-editor'
 
 const resolver = createResolver()
 
@@ -125,11 +127,17 @@ function renderElement(
 export function Canvas({
   store,
   pageId = null,
-  getZoom
+  getZoom,
+  selectedId = null,
+  editingId = null,
+  onTextDone
 }: {
   store: QuilStore
   pageId?: PageId | null
   getZoom?: () => number
+  selectedId?: ElementId | null
+  editingId?: ElementId | null
+  onTextDone?: (committed: boolean) => void
 }): React.ReactElement {
   const state = useSyncExternalStore<ProjectState>(
     (cb: () => void) => store.subscribe(cb),
@@ -148,7 +156,29 @@ export function Canvas({
     : Array.from(state.pages.values()).flatMap((p) => p.sectionIds)
 
   return (
-    <Layers ref={rootRef}>
+    <Layers
+      ref={rootRef}
+      overlay={
+        <>
+          <SelectionOverlay
+            rootRef={rootRef}
+            selectedId={selectedId}
+            kind={selectedId ? (state.nodes.get(selectedId)?.kind ?? null) : null}
+            rev={state.rev}
+            getZoom={getZoom ?? (() => 1)}
+          />
+          {editingId && (
+            <TextEditor
+              rootRef={rootRef}
+              elementId={editingId}
+              store={store}
+              getZoom={getZoom ?? (() => 1)}
+              onDone={(committed) => onTextDone?.(committed)}
+            />
+          )}
+        </>
+      }
+    >
       {sectionIds.map((sid) => renderElement(state, sid))}
     </Layers>
   )

@@ -1,164 +1,183 @@
 // src/pages/IntakeWizard.tsx
-// Intake wizard: 7 steps on /new/:step. Centered 640px column, step label,
-// H1 question, helper line, 3px accent progress bar, Back/Continue/Skip-for-now.
-// Autosaves each answer through commands; resume on refresh and back/forward.
-// FeatherPen typing adornment on answer inputs; PenLoader between adaptive steps.
+// Intake turn loop: replaces the hardcoded seven-step wizard. Each turn the
+// orchestrator extracts facts into slots and picks the single most valuable
+// gap to ask. Every change goes through store.dispatch (the single command
+// bus); nothing calls applyCommand directly.
 
 import * as React from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
+import { useNavigate } from 'react-router-dom'
 import {
   emptyProject,
-  createProject,
   type CommandId,
   type PageId,
-  type ElementId,
-  applyCommand,
 } from '../core'
 import { QuilStore } from '../app/store'
 import { projectRepository } from '../persistence'
-import { Button, Input, Textarea, SelectableCard, Chip, StatusMessage, FeatherPen, PenLoader } from '../ui'
-
-const STEPS = [
-  { id: '1', label: 'Question 1 of 7', title: 'Describe your app', type: 'text' },
-  { id: '2', label: 'Question 2 of 7', title: 'Who is it for', type: 'multipick' },
-  { id: '3', label: 'Question 3 of 7', title: 'What should visitors do', type: 'multipick' },
-  { id: '4', label: 'Question 4 of 7', title: 'How should it feel', type: 'singlepick' },
-  { id: '5', label: 'Question 5 of 7', title: 'Pick your pages', type: 'pages' },
-  { id: '6', label: 'Question 6 of 7', title: 'Where do we start', type: 'startpage' },
-  { id: '7', label: 'Review', title: 'Review your answers', type: 'review' },
-] as const
-
-type StepId = (typeof STEPS)[number]['id']
+import { mockProvider } from '../modules/intake/mock-provider'
+import {
+  Button,
+  Textarea,
+  Chip,
+  FeatherPen,
+  PenLoader,
+} from '../ui'
+import {
+  createIntakeSession,
+  step,
+  MAX_TURNS,
+  type IntakeSession,
+  type IntakeTurnResult,
+  type TurnQuestion,
+} from '../modules/intake/orchestrator'
 
 const PROGRESS_BAR_HEIGHT = 3
 
 export function IntakeWizard(): React.ReactElement {
   const navigate = useNavigate()
-  const { step: stepParam } = useParams<{ step: string }>()
-  const [searchParams] = useSearchParams()
-  const { user, loading } = useAuth()
 
   const storeRef = React.useRef<QuilStore | null>(null)
   if (!storeRef.current) storeRef.current = new QuilStore(emptyProject())
   const store = storeRef.current
 
-  const currentStepId = (stepParam as StepId) ?? '1'
-  const stepIndex = STEPS.findIndex((s) => s.id === currentStepId)
-  const step = STEPS[stepIndex]
+  const [session, setSession] = React.useState<IntakeSession>(createIntakeSession)
+  const [inputValue, setInputValue] = React.useState('')
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [status, setStatus] = React.useState<'active' | 'done'>('active')
 
-  if (!step) {
-    return <div data-testid="intake-not-found">Step not found</div>
+  const _baseRev = store.getState().rev
+
+  const handleUserTurn = async (userTurn: string): Promise<void> => {
+    setError(null)
+    if (!userTurn.trim()) return
+    setSaving(true)
+    try {
+      const currentRev = store.getState().rev
+      const result: IntakeTurnResult = await step(session, userTurn, mockProvider, currentRev)
+      // Commit the intake update through the single command bus.
+      if (result.command) {
+        result.command.baseRev = currentRev
+        const commit = store.dispatch(result.command)
+        if (!commit.ok) {
+          setError(commit.error.message)
+          setSaving(false)
+          return
+        }
+      }
+      setSession(result.session)
+      setInputValue('')
+      if (result.done) {
+        setStatus('done')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Intake turn failed')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const isLast = stepIndex === STEPS.length - 1
-  const progress = ((stepIndex + 1) / STEPS.length) * 100
-
-  const [answers, setAnswers] = React.useState<Record<string, unknown>>({})
-  const [loadingOptions, setLoadingOptions] = React.useState(false)
-
-  // Simulate loading adaptive options from provider
-  React.useEffect(() => {
-    if (step.type === 'multipick' || step.type === 'singlepick') {
-      setLoadingOptions(true)
-      const timer = setTimeout(() => setLoadingOptions(false), 400)
-      return () => clearTimeout(timer)
-    }
-  }, [step.type])
-
-  const handleBack = (): void => {
-    if (stepIndex > 0) {
-      navigate(`/new/${STEPS[stepIndex - 1]!.id}`)
-    }
+  const handleOptionTap = (option: string): void => {
+    void handleUserTurn(option)
   }
 
   const handleSkip = (): void => {
-    if (isLast) return
-    navigate(`/new/${STEPS[stepIndex + 1]!.id}`)
+    // Skip just submits an empty turn; the orchestrator will ask the next gap.
+    void handleUserTurn('')
   }
 
-  const handleContinue = async (): Promise<void> => {
-    if (isLast) {
-      await createProjectFromAnswers()
-      return
-    }
-    navigate(`/new/${STEPS[stepIndex + 1]!.id}`)
-  }
+  const finishIntake = async (): Promise<void> => {
+    setSaving(true)
+    try {
+      // Create pages from the confirmed 'pages' slot.
+      const pagesSlot = session.slots.get('pages')
+      const pageNames: string[] = pagesSlot?.value && Array.isArray(pagesSlot.value)
+        ? pagesSlot.value
+        : ['Home']
 
-  async function createProjectFromAnswers(): Promise<void> {
-    const brief = String(answers.brief ?? 'Untitled project')
-    const pages = (answers.pages as string[]) ?? ['Home']
-    const startPage = (answers.startPage as string) ?? pages[0]
+      const pageIdMap = new Map<string, PageId>()
+      let cmd = 1
+      const nextId = (): CommandId => `cmd-${cmd++}` as CommandId
+      const rev = (): number => store.getState().rev
 
-    const state = createProject(brief)
-    const store = new QuilStore(state)
-
-    const pageIdMap = new Map<string, PageId>()
-    let cmd = 1
-
-    // set_brief
-    const briefId = `cmd-${cmd++}` as CommandId
-    const r0 = applyCommand(state, {
-      type: 'set_brief',
-      commandId: briefId,
-      baseRev: state.rev,
-      brief,
-    })
-    if (!r0.ok) throw new Error(r0.error.message)
-    state.rev = r0.state.rev
-
-    // set_intake_answer for each answer
-    for (const [questionId, answer] of Object.entries(answers)) {
-      if (questionId === 'brief' || questionId === 'pages' || questionId === 'startPage') continue
-      const ansId = `cmd-${cmd++}` as CommandId
-      const r = applyCommand(state, {
-        type: 'set_intake_answer',
-        commandId: ansId,
-        baseRev: state.rev,
-        questionId,
-        answer: String(answer),
+      // set_brief from the purpose slot
+      const purposeSlot = session.slots.get('purpose')
+      let brief: string = 'Untitled project'
+      if (purposeSlot && typeof purposeSlot.value === 'string') {
+        brief = purposeSlot.value
+      }
+      const r0 = store.dispatch({
+        type: 'set_brief',
+        commandId: nextId(),
+        baseRev: rev(),
+        brief,
       })
-      if (!r.ok) throw new Error(r.error.message)
-      state.rev = r.state.rev
-    }
+      if (!r0.ok) throw new Error(r0.error.message)
 
-    // add_page for each page
-    for (const pageName of pages) {
-      const pageId = `page-${pageName.toLowerCase().replace(/\s+/g, '-')}` as PageId
-      pageIdMap.set(pageName, pageId)
-      const addId = `cmd-${cmd++}` as CommandId
-      const r = applyCommand(state, {
-        type: 'add_page',
-        commandId: addId,
-        baseRev: state.rev,
-        pageId,
-        name: pageName,
+      // Commit each intake answer as a set_intake_answer command
+      for (const [key, slot] of session.slots) {
+        if (slot.value === undefined || slot.value === null) continue
+        const answer = Array.isArray(slot.value) ? slot.value.join(', ') : String(slot.value)
+        const r = store.dispatch({
+          type: 'set_intake_answer',
+          commandId: nextId(),
+          baseRev: rev(),
+          questionId: key,
+          answer,
+        })
+        if (!r.ok) throw new Error(r.error.message)
+      }
+
+      // add_page for each confirmed page
+      for (const pageName of pageNames) {
+        const pageId = `page-${String(pageName).toLowerCase().replace(/\s+/g, '-')}` as PageId
+        pageIdMap.set(String(pageName), pageId)
+        const r = store.dispatch({
+          type: 'add_page',
+          commandId: nextId(),
+          baseRev: rev(),
+          pageId,
+          name: String(pageName),
+        })
+        if (!r.ok) throw new Error(r.error.message)
+      }
+
+      // set_starting_page (default to first page)
+      const startingSlot = session.slots.get('startingPage')
+      let startName: string = pageNames[0] ?? 'Home'
+      if (startingSlot && typeof startingSlot.value === 'string') {
+        startName = startingSlot.value
+      }
+      const startPageId = pageIdMap.get(startName) ?? [...pageIdMap.values()][0]!
+      const rStart = store.dispatch({
+        type: 'set_starting_page',
+        commandId: nextId(),
+        baseRev: rev(),
+        pageId: startPageId,
       })
-      if (!r.ok) throw new Error(r.error.message)
-      state.rev = r.state.rev
+      if (!rStart.ok) throw new Error(rStart.error.message)
+
+      await projectRepository.init()
+      await projectRepository.writeSnapshot(store.getState().projectId, store.getState())
+
+      navigate(`/p/${store.getState().projectId}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create project')
+    } finally {
+      setSaving(false)
     }
-
-    // set_starting_page
-    const startPageId = pageIdMap.get(startPage) ?? pages.map((p) => pageIdMap.get(p))[0]!
-    const startId = `cmd-${cmd++}` as CommandId
-    const r = applyCommand(state, {
-      type: 'set_starting_page',
-      commandId: startId,
-      baseRev: state.rev,
-      pageId: startPageId,
-    })
-    if (!r.ok) throw new Error(r.error.message)
-    state.rev = r.state.rev
-
-    await projectRepository.init()
-    await projectRepository.writeSnapshot(state.projectId, state)
-
-    navigate(`/p/${state.projectId}`)
   }
 
-  if (!step) {
-    return <div data-testid="intake-not-found">Step not found</div>
-  }
+  const currentQuestion: TurnQuestion | undefined = session.lastQuestion
+    ? {
+        kind: 'ask',
+        slots: [],
+        question: session.lastQuestion,
+        options: [],
+        why: '',
+      }
+    : undefined
+
+  const progress = status === 'done' ? 100 : Math.min(100, Math.round((session.turnIdCounter / MAX_TURNS) * 100))
 
   return (
     <div
@@ -200,7 +219,7 @@ export function IntakeWizard(): React.ReactElement {
                 letterSpacing: '0.05em',
               }}
             >
-              {step.label}
+              Intake — turn {session.turnIdCounter} of {MAX_TURNS}
             </span>
             <h1
               style={{
@@ -210,333 +229,153 @@ export function IntakeWizard(): React.ReactElement {
                 lineHeight: 1.1,
               }}
             >
-              {step.title}
+              {status === 'done' ? 'Review complete' : currentQuestion?.question ?? 'Starting intake…'}
             </h1>
+            {currentQuestion?.why && (
+              <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-sm)', marginTop: 'var(--quil-space-1)' }}>
+                {currentQuestion.why}
+              </p>
+            )}
           </div>
 
-          {/* Step content */}
-          {step.type === 'text' && (
-            <StepDescribe answers={answers} setAnswers={setAnswers} />
-          )}
-          {step.type === 'multipick' && (
-            <>
-              {loadingOptions ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--quil-space-8)' }}>
-                  <PenLoader size={32} loading={true} />
-                </div>
-              ) : (
-                <StepAudience answers={answers} setAnswers={setAnswers} />
-              )}
-            </>
-          )}
-          {step.type === 'pages' && <StepPages answers={answers} setAnswers={setAnswers} />}
-          {step.type === 'startpage' && <StepStart answers={answers} setAnswers={setAnswers} />}
-          {step.type === 'review' && <StepReview answers={answers} setAnswers={setAnswers} />}
-
-          {/* Footer */}
-          <div style={{ marginTop: 'var(--quil-space-8)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            {stepIndex > 0 && (
-              <Button variant="neutral" onClick={handleBack}>
-                Back
-              </Button>
-            )}
-            {step.type !== 'multipick' && stepIndex < STEPS.length - 2 && (
-              <button
-                onClick={handleSkip}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: 'color-mix(in oklab, var(--quil-text-100) 50%, var(--quil-bg))',
-                  fontSize: 'var(--quil-text-sm)',
-                  fontFamily: 'var(--quil-font-ui)',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                }}
-              >
-                Skip for now
-              </button>
-            )}
-            <Button
-              variant="primary"
-              onClick={handleContinue}
-              disabled={loadingOptions}
+          {error && (
+            <div
+              data-testid="intake-error"
+              style={{
+                padding: 'var(--quil-space-2) var(--quil-space-3)',
+                background: '#fee2e2',
+                color: '#991b1b',
+                borderRadius: 'var(--quil-radius-sm)',
+                fontSize: 'var(--quil-text-sm)',
+                border: '1px solid #fecaca',
+                marginBottom: 'var(--quil-space-4)',
+              }}
             >
-              {loadingOptions ? <PenLoader size={20} loading={true} /> : isLast ? 'Create project' : 'Continue'}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function StepDescribe({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  const [value, setValue] = React.useState(String(answers.brief ?? ''))
-
-  React.useEffect(() => {
-    setAnswers((prev) => ({ ...prev, brief: value }))
-  }, [value, setAnswers])
-
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        Tell Quil what you are building. Example: "A boutique hotel booking site with a home page and a rooms page."
-      </p>
-      <div style={{ position: 'relative' }}>
-        <Textarea
-          placeholder="Describe your site…"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          rows={6}
-        />
-        <FeatherPen style={{ position: 'absolute', right: 'var(--quil-space-3)', top: 'var(--quil-space-4)', pointerEvents: 'none' }} size={16} />
-      </div>
-      <div style={{ display: 'flex', gap: 'var(--quil-space-2)', marginTop: 'var(--quil-space-3)', flexWrap: 'wrap' }}>
-        <Chip variant="default" style={{ cursor: 'pointer' }} onClick={() => setValue('A boutique hotel booking site with Home and Rooms pages')}>
-          Boutique hotel site
-        </Chip>
-        <Chip variant="default" style={{ cursor: 'pointer' }} onClick={() => setValue('A portfolio site for a freelance designer')}>
-          Portfolio site
-        </Chip>
-        <Chip variant="default" style={{ cursor: 'pointer' }} onClick={() => setValue('An e-commerce store for handmade ceramics')}>
-          E-commerce store
-        </Chip>
-      </div>
-    </div>
-  )
-}
-
-function StepAudience({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  const options = [
-    { id: 'customers', label: 'Customers' },
-    { id: 'partners', label: 'Partners' },
-    { id: 'internal', label: 'Internal team' },
-  ]
-  const selected = new Set((answers.audience as string[]) ?? [])
-
-  const toggle = (id: string): void => {
-    const next = new Set(selected)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    setAnswers((prev) => ({ ...prev, audience: [...next] }))
-  }
-
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        Who is the primary audience? Pick all that apply.
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 'var(--quil-space-3)' }}>
-        {options.map((opt) => (
-          <SelectableCard
-            key={opt.id}
-            mode="checkbox"
-            isSelected={selected.has(opt.id)}
-            onSelect={() => toggle(opt.id)}
-            aria-checked={selected.has(opt.id)}
-          >
-            {opt.label}
-          </SelectableCard>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function StepGoals({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  const options = [
-    { id: 'book', label: 'Make a reservation' },
-    { id: 'contact', label: 'Contact the team' },
-    { id: 'browse', label: 'Browse the catalog' },
-  ]
-  const selected = new Set((answers.goals as string[]) ?? [])
-
-  const toggle = (id: string): void => {
-    const next = new Set(selected)
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    setAnswers((prev) => ({ ...prev, goals: [...next] }))
-  }
-
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        What should visitors do? Pick all that apply.
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 'var(--quil-space-3)' }}>
-        {options.map((opt) => (
-          <SelectableCard
-            key={opt.id}
-            mode="checkbox"
-            isSelected={selected.has(opt.id)}
-            onSelect={() => toggle(opt.id)}
-            aria-checked={selected.has(opt.id)}
-          >
-            {opt.label}
-          </SelectableCard>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function StepTone({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  const options = [
-    { id: 'calm', label: 'Calm', description: 'Minimal, spacious, restrained' },
-    { id: 'bold', label: 'Bold', description: 'Expressive, high-contrast, confident' },
-    { id: 'playful', label: 'Playful', description: 'Light, friendly, approachable' },
-  ]
-  const selected = answers.tone as string | undefined
-
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        How should it feel? Choose one.
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 'var(--quil-space-3)' }}>
-        {options.map((opt) => (
-          <SelectableCard
-            key={opt.id}
-            mode="radio"
-            isSelected={selected === opt.id}
-            onSelect={() => setAnswers((prev) => ({ ...prev, tone: opt.id }))}
-            aria-checked={selected === opt.id}
-          >
-            <div>
-              <div style={{ fontWeight: 600 }}>{opt.label}</div>
-              <div style={{ fontSize: 'var(--quil-text-xs)', color: 'var(--quil-text-70)' }}>{opt.description}</div>
+              {error}
             </div>
-          </SelectableCard>
-        ))}
-      </div>
-    </div>
-  )
-}
+          )}
 
-function StepPages({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  const [pageNames, setPageNames] = React.useState<string[]>(answers.pages as string[] ?? ['Home', 'About'])
-  const [newPageName, setNewPageName] = React.useState('')
-
-  React.useEffect(() => {
-    setAnswers((prev) => ({ ...prev, pages: pageNames }))
-  }, [pageNames, setAnswers])
-
-  const addPage = (): void => {
-    const name = newPageName.trim()
-    if (!name || pageNames.includes(name)) return
-    setPageNames([...pageNames, name])
-    setNewPageName('')
-  }
-
-  const removePage = (index: number): void => {
-    if (pageNames.length <= 1) return
-    setPageNames(pageNames.filter((_, i) => i !== index))
-  }
-
-  const renamePage = (index: number, value: string): void => {
-    const next = [...pageNames]
-    next[index] = value.trim()
-    setPageNames(next.filter(Boolean))
-  }
-
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        Pick your pages. Rename inline, or add a new one.
-      </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--quil-space-3)' }}>
-        {pageNames.map((name, index) => (
-          <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 'var(--quil-space-2)', alignSelf: 'start' }}>
-            <SelectableCard
-              mode="checkbox"
-              isSelected={true}
-              onSelect={() => removePage(index)}
-              aria-checked={true}
-              style={{ padding: 'var(--quil-space-1) var(--quil-space-2)' }}
-            >
-              <Input
-                value={name}
-                onChange={(e) => renamePage(index, e.target.value)}
-                maxLength={64}
-                style={{ minWidth: 150 }}
-              />
-            </SelectableCard>
-          </div>
-        ))}
-        <div style={{ display: 'flex', gap: 'var(--quil-space-2)' }}>
-          <Input
-            value={newPageName}
-            onChange={(e) => setNewPageName(e.target.value)}
-            placeholder="Add a page…"
-            maxLength={64}
-          />
-          <Button variant="primary" onClick={addPage} disabled={!newPageName.trim() || pageNames.includes(newPageName.trim())}>
-            Add
-          </Button>
+          {status === 'done' ? (
+            <div>
+              <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 'var(--quil-space-1)' }}>
+                ✓ Intake complete
+              </div>
+              <div style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-sm)' }}>
+                All required decisions are confirmed. Creating your project…
+              </div>
+              <Button
+                data-testid="intake-create-project"
+                onClick={finishIntake}
+                disabled={saving}
+                style={buttonBase}
+              >
+                {saving ? <PenLoader size={20} loading={true} /> : 'Create project'}
+              </Button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ position: 'relative' }}>
+                <Textarea
+                  data-testid="intake-input"
+                  placeholder="Type your answer…"
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  rows={4}
+                />
+                <FeatherPen
+                  style={{ position: 'absolute', right: 'var(--quil-space-3)', top: 'var(--quil-space-4)', pointerEvents: 'none' }}
+                  size={16}
+                />
+              </div>
+              {currentQuestion?.options && currentQuestion.options.length > 0 && (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                    gap: 'var(--quil-space-2)',
+                    marginTop: 'var(--quil-space-3)',
+                  }}
+                >
+                  {currentQuestion.options.map((opt) => (
+                    <Chip
+                      key={opt}
+                      variant="default"
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => handleOptionTap(opt)}
+                    >
+                      {opt}
+                    </Chip>
+                  ))}
+                </div>
+              )}
+              <div style={{ marginTop: 'var(--quil-space-3)', display: 'flex', gap: 'var(--quil-space-2)', alignItems: 'center' }}>
+                <Button
+                  data-testid="intake-submit"
+                  onClick={() => void handleUserTurn(inputValue)}
+                  disabled={saving || !inputValue.trim()}
+                  style={buttonBase}
+                >
+                  {saving ? <PenLoader size={20} loading={true} /> : 'Submit'}
+                </Button>
+                <button
+                  data-testid="intake-skip"
+                  onClick={handleSkip}
+                  style={{
+                    background: 'transparent',
+                    border: '1px dashed var(--quil-line)',
+                    color: 'var(--quil-text-70)',
+                    fontSize: 'var(--quil-text-sm)',
+                    fontFamily: 'var(--quil-font-ui)',
+                    padding: '0 var(--quil-space-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Skip
+                </button>
+                <button
+                  data-testid="intake-enough"
+                  onClick={() => {
+                    // Treat 'That's enough' as a done signal: mark remaining
+                    // required slots and finish.
+                    void handleUserTurn("That's enough")
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: '1px dashed var(--quil-line)',
+                    color: 'var(--quil-text-70)',
+                    fontSize: 'var(--quil-text-sm)',
+                    fontFamily: 'var(--quil-font-ui)',
+                    padding: '0 var(--quil-space-2)',
+                    cursor: 'pointer',
+                    marginLeft: 'var(--quil-space-2)',
+                  }}
+                >
+                  That&apos;s enough
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-function StepStart({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  const pages = (answers.pages as string[]) ?? ['Home']
-  const selected = answers.startPage as string | undefined
-
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        Where do we start? Choose the starting page.
-      </p>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 'var(--quil-space-3)' }}>
-        {pages.map((page) => (
-          <SelectableCard
-            key={page}
-            mode="radio"
-            isSelected={selected === page}
-            onSelect={() => setAnswers((prev) => ({ ...prev, startPage: page }))}
-            aria-checked={selected === page}
-          >
-            {page}
-          </SelectableCard>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function StepReview({ answers, setAnswers }: { answers: Record<string, unknown>; setAnswers: React.Dispatch<React.SetStateAction<Record<string, unknown>>> }) {
-  return (
-    <div>
-      <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-base)', marginBottom: 'var(--quil-space-4)' }}>
-        Review your answers before creating the project.
-      </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--quil-space-3)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--quil-text-70)' }}>Brief</span>
-          <span style={{ maxWidth: 300 }}>{String(answers.brief ?? '—')}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--quil-text-70)' }}>Audience</span>
-          <span>{String(((answers.audience as string[]) ?? []).join(', ') || '—')}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--quil-text-70)' }}>Goals</span>
-          <span>{String(((answers.goals as string[]) ?? []).join(', ') || '—')}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--quil-text-70)' }}>Tone</span>
-          <span>{String(answers.tone ?? '—')}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--quil-text-70)' }}>Pages</span>
-          <span>{String(((answers.pages as string[]) ?? []).join(', ') || '—')}</span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-          <span style={{ color: 'var(--quil-text-70)' }}>Start page</span>
-          <span>{String(answers.startPage ?? '—')}</span>
-        </div>
-      </div>
-    </div>
-  )
-}
+const buttonBase = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 'var(--quil-space-2)',
+  padding: `0 var(--quil-space-3)`,
+  minHeight: 'var(--quil-target-min)',
+  minWidth: 'var(--quil-target-min)',
+  background: 'var(--quil-surface)',
+  border: `1px solid var(--quil-line)`,
+  borderRadius: 'var(--quil-radius-sm)',
+  color: 'var(--quil-text-100)',
+  fontSize: 'var(--quil-text-sm)',
+  fontFamily: 'var(--quil-font-ui)',
+  fontWeight: 600,
+  boxShadow: 'var(--quil-shadow-3)',
+  cursor: 'pointer',
+} as React.CSSProperties

@@ -4,8 +4,6 @@ import {
   buildSyntheticFixture,
   resolveElement,
   createResolverMemo,
-  upsertDecision,
-  validateProject,
   setInvariantChecking
 } from '../src/core'
 
@@ -17,7 +15,6 @@ const state = buildSyntheticFixture(totalNodes)
 const textElementIds = [...state.nodes.keys()].filter((id) => id.includes('el-perf-')).slice(0, 200)
 
 // Create a global decision touching ALL text elements (simulating a global button/text treatment change)
-const decisionId = ''
 const decidedState = (() => {
   let id = ''
   const next = (() => {

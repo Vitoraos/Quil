@@ -42,7 +42,7 @@ describe('drift-badge: deviation signal + override/propose', () => {
   it('nothing changes a decision without approval', () => {
     const state = referenceProject()
     const store = new QuilStore(state)
-    const { container } = render(
+    const { container: _container } = render(
       <DriftBadge
         store={store}
         elementId={'el-hero-cta' as never}

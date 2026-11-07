@@ -33,7 +33,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
     ]
 
     let violations = 0
-    let rejectedCommands = 0
+    let _rejectedCommands = 0
 
     for (let seq = 0; seq < 10000; seq++) {
       const state = referenceProject()
@@ -53,7 +53,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             value: valuePool[Math.floor(rand() * valuePool.length)]
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         } else if (kindPick === 'undo') {
@@ -62,7 +62,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             commandId: `f-${seq}-${step}` as never
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         } else if (kindPick === 'redo') {
@@ -71,7 +71,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             commandId: `f-${seq}-${step}` as never
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         } else if (kindPick === 'add_element') {
@@ -85,7 +85,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             props: { text: 'fuzz text' }
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         } else if (kindPick === 'remove_element') {
@@ -96,7 +96,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             elementId: targetId as never
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         } else if (kindPick === 'move_element') {
@@ -108,14 +108,14 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             newParentId: targetId as never
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         } else if (kindPick === 'apply_candidate') {
           const targetKind = state.nodes.get(targetId as never)?.kind
           const defId = targetKind === 'section' ? 'hero' : targetKind === 'button' ? 'button' : null
           if (!defId) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
           const res = applyCommand(state, {
@@ -131,7 +131,7 @@ describe('Phase 1 exit gate: 10,000 fuzzed command sequences produce no invarian
             ]
           })
           if (!res.ok) {
-            rejectedCommands++
+            _rejectedCommands++
             continue
           }
         }

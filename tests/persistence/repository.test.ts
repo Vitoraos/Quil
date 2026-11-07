@@ -1,6 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { indexedDB as fakeIndexedDB, IDBDatabase, IDBObjectStore, IDBIndex, IDBKeyRange, IDBCursor, IDBTransaction } from 'fake-indexeddb'
-import type { ProjectState } from '../../src/core'
 import { referenceProject, buildSyntheticFixture } from '../../src/core'
 import { DexieProjectRepository } from '../../src/persistence/indexeddb-repository'
 import { FallbackLock } from '../../src/persistence/indexeddb-repository'

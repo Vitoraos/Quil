@@ -21,7 +21,7 @@ export function ReadOnlyBanner({ store }: { store: QuilStore }): React.ReactElem
         borderBottom: `1px solid var(--quil-line)`,
       }}
     >
-      <span style={{ fontSize: 16 }}>🔒</span>
+      <span style={{ fontSize: 'var(--quil-text-base)' }}>🔒</span>
       <span>This project is open for editing in another tab. You are viewing read-only.</span>
     </div>
   )

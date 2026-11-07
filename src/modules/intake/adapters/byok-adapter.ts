@@ -2,12 +2,14 @@
 // only, redacted in logs, never sent to analytics or stored in plaintext.
 // Wraps RequestLayer for deadline, retry, circuit breaker, and size caps.
 
-import { AIProvider, FollowUpQuestion, PageSuggestion, GeneratedPageSpec } from '../provider'
+import { AIProvider, FollowUpQuestion, PageSuggestion, GeneratedPageSpec, PlanIntakeTurnInput } from '../provider'
 import {
   followUpQuestionsResponseSchema,
   suggestPagesResponseSchema,
   pageSpecResponseSchema,
-  parseProviderResponse
+  intakeTurnOutputSchema,
+  parseProviderResponse,
+  type IntakeTurnOutput
 } from '../schemas'
 import { RequestLayer } from '../request-layer'
 
@@ -75,6 +77,13 @@ export class ByokAdapter implements AIProvider {
   async generatePageSpec(input: { brief: string; answers: Record<string, string>; pageName: string }, signal?: AbortSignal): Promise<GeneratedPageSpec> {
     return this.post('/v1/generate-page-spec', input, (json) =>
       parseProviderResponse(pageSpecResponseSchema, json, `page-spec:${input.pageName}`),
+      signal
+    )
+  }
+
+  async planIntakeTurn(input: PlanIntakeTurnInput, signal?: AbortSignal): Promise<IntakeTurnOutput> {
+    return this.post('/v1/plan-intake-turn', input, (json) =>
+      parseProviderResponse(intakeTurnOutputSchema, json, 'plan-intake-turn'),
       signal
     )
   }

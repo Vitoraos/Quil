@@ -30,6 +30,8 @@ describe('intake: core spec validation', () => {
         {
           key: 'hero',
           purpose: 'Hero section',
+          role: 'content' as never,
+          goal: 'Test goal',
           elements: [
             { key: 'heading', kind: 'heading', purpose: 'Headline', required: true },
             { key: 'cta', kind: 'button', purpose: 'CTA', required: true }
@@ -48,8 +50,8 @@ describe('intake: core spec validation', () => {
       purpose: 'Welcome page',
       version: 1,
       sections: [
-        { key: 'hero', purpose: 'Hero', elements: [{ key: 'h1', kind: 'heading', purpose: 'H', required: true }] },
-        { key: 'hero', purpose: 'Hero dup', elements: [{ key: 'h2', kind: 'heading', purpose: 'H2', required: true }] }
+        { key: 'hero', purpose: 'Hero', role: 'content' as never, goal: 'Test goal', elements: [{ key: 'h1', kind: 'heading', purpose: 'H', required: true }] },
+        { key: 'hero', purpose: 'Hero dup', role: 'content' as never, goal: 'Test goal', elements: [{ key: 'h2', kind: 'heading', purpose: 'H2', required: true }] }
       ]
     })
     const errors = validatePageSpec(spec)
@@ -66,6 +68,8 @@ describe('intake: core spec validation', () => {
         {
           key: 'hero',
           purpose: 'Hero',
+          role: 'content' as never,
+          goal: 'Test goal',
           elements: [
             { key: 'h1', kind: 'heading', purpose: 'H1', required: true },
             { key: 'h1', kind: 'heading', purpose: 'H1 dup', required: true }
@@ -83,7 +87,7 @@ describe('intake: core spec validation', () => {
       name: 'Home',
       purpose: 'Welcome page',
       version: 1,
-      sections: [{ key: 'hero', purpose: 'Hero', elements: [] }]
+      sections: [{ key: 'hero', purpose: 'Hero', role: 'content' as never, goal: 'Test goal', elements: [] }]
     })
     expect(result.success).toBe(false)
   })
@@ -92,6 +96,8 @@ describe('intake: core spec validation', () => {
     const sections = Array.from({ length: 21 }, (_, i) => ({
       key: `s${i}`,
       purpose: `Section ${i}`,
+      role: 'content' as never,
+      goal: 'Test goal',
       elements: [{ key: `e${i}`, kind: 'heading' as const, purpose: 'P', required: true }]
     }))
     const result = pageSpecSchema.safeParse({
@@ -131,6 +137,8 @@ describe('intake: skeleton instantiation via commands', () => {
           {
             key: 'hero',
             purpose: 'Hero section',
+            role: 'content' as never,
+            goal: 'Test goal',
             elements: [
               { key: 'heading', kind: 'heading', purpose: 'Main headline', required: true },
               { key: 'cta', kind: 'button', purpose: 'Call to action', required: true }
@@ -189,6 +197,8 @@ describe('intake: skeleton instantiation via commands', () => {
           {
             key: 'intro',
             purpose: 'Intro',
+            role: 'content' as never,
+            goal: 'Test goal',
             elements: [{ key: 'h1', kind: 'heading', purpose: 'Rooms', required: true }]
           }
         ]
@@ -311,7 +321,7 @@ describe('intake: brief and answers commands', () => {
         purpose: 'p',
         version: 1,
         sections: [
-          { key: 's1', purpose: 'P', elements: [{ key: 'e1', kind: 'heading', purpose: 'E', required: true }] }
+          { key: 's1', purpose: 'P', role: 'content' as never, goal: 'Test goal', elements: [{ key: 'e1', kind: 'heading', purpose: 'E', required: true }] }
         ]
       }
     })

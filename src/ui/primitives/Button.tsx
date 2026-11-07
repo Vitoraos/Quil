@@ -1,7 +1,7 @@
 // src/ui/primitives/Button.tsx
-// Solid fill button per UI contract: label colour is var(--quil-bg),
-// mechanical press with hard 3px edge collapsing on :active via translateY(3px).
-// Primary uses accent fill; neutral uses monochrome fill.
+// Solid fill button per UI contract: primary uses the button fill with the
+// button label colour. Press is subtle (opacity/scale from base.css), not a
+// hard 3px mechanical edge.
 
 import * as React from 'react'
 
@@ -28,6 +28,7 @@ export function Button({
       type="button"
       disabled={isDisabled}
       aria-disabled={isDisabled}
+      aria-pressed={isPressed || undefined}
       className={className}
       style={{
         display: 'inline-flex',
@@ -40,16 +41,13 @@ export function Button({
         border: '0',
         borderRadius: 'var(--quil-radius-sm)',
         background: isPrimary
-          ? 'var(--quil-accent)'
+          ? 'var(--quil-button)'
           : 'color-mix(in oklab, var(--quil-text-100) 78%, var(--quil-bg))',
-        color: 'var(--quil-bg)',
+        color: isPrimary ? 'var(--quil-button-text)' : 'var(--quil-bg)',
         fontWeight: 600,
         fontSize: 'var(--quil-text-sm)',
         lineHeight: 1,
         fontFamily: 'var(--quil-font-ui)',
-        boxShadow: `0 var(--quil-press) 0 ${isPrimary ? 'color-mix(in oklab, var(--quil-accent) 65%, var(--quil-bg))' : 'color-mix(in oklab, var(--quil-text-100) 55%, var(--quil-bg))'}`,
-        transform: (isDisabled || isPressed) ? 'translateY(var(--quil-press))' : undefined,
-        transition: 'transform var(--quil-duration-press) ease-out',
         cursor: isDisabled ? 'not-allowed' : 'pointer',
       } as React.CSSProperties}
       {...props}

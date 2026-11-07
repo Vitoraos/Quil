@@ -1,6 +1,7 @@
 import Dexie, { type Table } from 'dexie'
-import type { PageId, ProjectState } from '../core'
+import type { IntakeStatus, PageId, ProjectState } from '../core'
 import type { DesignCommand } from '../core/commands'
+import type { TurnRecord } from '../core/intake-schema'
 import { applyCommand } from '../core/apply'
 import {
   ProjectRepository,
@@ -42,6 +43,14 @@ function serializeState(state: ProjectState): unknown {
     nextDecisionSeq: state.nextDecisionSeq,
     brief: state.brief,
     intakeAnswers: [...state.intakeAnswers.entries()],
+    intake: [...state.intake.entries()],
+    facts: [...state.facts.entries()],
+    pageIntake: [...state.pageIntake.entries()],
+    intakeStatus: state.intakeStatus,
+    intakeRev: state.intakeRev,
+    nextFactSeq: state.nextFactSeq,
+    seenTurnIds: state.seenTurnIds,
+    turnRecords: state.turnRecords,
     startingPageId: state.startingPageId,
     pageSpecs: [...state.pageSpecs.entries()],
   }
@@ -65,6 +74,14 @@ function deserializeState(data: unknown): ProjectState {
     nextDecisionSeq: (d.nextDecisionSeq as number) ?? 1,
     brief: (d.brief as string) ?? '',
     intakeAnswers: new Map(((d.intakeAnswers as [string, unknown][]) ?? []).map(([k, v]) => [k as never, v as never])),
+    intake: new Map(((d.intake as [string, unknown][]) ?? []).map(([k, v]) => [k as never, v])),
+    facts: new Map(((d.facts as [string, unknown][]) ?? []).map(([k, v]) => [k as never, v])),
+    pageIntake: new Map(((d.pageIntake as [string, unknown][]) ?? []).map(([k, v]) => [k as never, v])),
+    intakeStatus: (d.intakeStatus as IntakeStatus) ?? { project: 'open', pages: new Map() },
+    intakeRev: (d.intakeRev as number) ?? 0,
+    nextFactSeq: (d.nextFactSeq as number) ?? 1,
+    seenTurnIds: ((d.seenTurnIds as unknown[]) ?? []) as string[],
+    turnRecords: ((d.turnRecords as unknown[]) ?? []) as TurnRecord[],
     startingPageId: ((d.startingPageId as string) ?? null) as PageId | null,
     pageSpecs: new Map(((d.pageSpecs as [string, unknown][]) ?? []).map(([k, v]) => [k as never, v])),
   } as ProjectState

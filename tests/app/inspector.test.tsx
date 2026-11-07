@@ -8,20 +8,20 @@ describe('inspector: valid/invalid input, inline error, validator before dispatc
   it('valid input dispatches a typed command and updates state', () => {
     const state = referenceProject()
     const store = new QuilStore(state)
-    const { container } = render(<Inspector store={store} elementId={'el-hero-cta' as never} />)
+    const { container } = render(<Inspector store={store} elementId={'el-hero-heading' as never} />)
 
-    const input = (container.querySelector('input[name="bgColor"]') as HTMLInputElement)!
-    fireEvent.change(input, { target: { value: '#F5F5F2' } })
+    const input = (container.querySelector('input[name="text"]') as HTMLInputElement)!
+    fireEvent.change(input, { target: { value: 'A new heading' } })
     fireEvent.blur(input)
 
     expect(store.getState().rev).toBeGreaterThan(0)
-    expect(store.getState().nodes.get('el-hero-cta' as never)?.props['bgColor']).toBe('#F5F5F2')
+    expect(store.getState().nodes.get('el-hero-heading' as never)?.props['text']).toBe('A new heading')
   })
 
   it('invalid input is rejected at the command bus and changes nothing', () => {
     const state = referenceProject()
     const store = new QuilStore(state)
-    const { container } = render(<Inspector store={store} elementId={'el-hero-cta' as never} />)
+    const { container: _container } = render(<Inspector store={store} elementId={'el-hero-cta' as never} />)
 
     // Dispatch an invalid color directly through the command bus (the same path
     // the inspector's blur handler uses). Validation rejects it, state is unchanged.
@@ -40,7 +40,7 @@ describe('inspector: valid/invalid input, inline error, validator before dispatc
   it('zero or negative size rejected at the command bus', () => {
     const state = referenceProject()
     const store = new QuilStore(state)
-    const { container } = render(<Inspector store={store} elementId={'el-hero-heading' as never} />)
+    const { container: _container } = render(<Inspector store={store} elementId={'el-hero-heading' as never} />)
 
     const res = store.dispatch({
       type: 'set_property',

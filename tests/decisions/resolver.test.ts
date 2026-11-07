@@ -5,8 +5,6 @@ import {
   createProjectState,
   upsertDecision,
   resolveElement,
-  createResolverMemo,
-  applicableDecisions,
   type DecisionScope,
   type ElementId,
   type NodeKind,
@@ -123,7 +121,7 @@ describe('decision resolver', () => {
     sec.childIds.push(btn.id)
     s0.nodes.set(btn.id, btn)
     // nextDecisionSeq starts at 1
-    const { state: s1, id: id1 } = (() => {
+    const { state: s1, id: _id1 } = (() => {
       let id = ''
       const n = produce(s0, (d) => {
         id = upsertDecision(d, globalButtonScope, 'bgColor', '#F5F5F2', 'button') as string

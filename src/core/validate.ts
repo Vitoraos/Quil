@@ -4,6 +4,7 @@ import { ID_PATTERN, type ElementId } from './ids'
 import { bounds, type ProjectState } from './state'
 import { decisionZeroMatchReport } from './decisions'
 import { validatePageSpec } from './specs'
+import { getSlotDef, validateSlotValue } from './intake-schema'
 
 export interface InvariantViolation {
   rule: string
@@ -210,6 +211,237 @@ export function validateProject(state: ProjectState): InvariantViolation[] {
       target: zeroId,
       message: `Approved decision ${zeroId} matches no element`
     })
+  }
+
+  // Intake slot store invariants
+  if (state.seenTurnIds.length > bounds.maxSeenTurnIds) {
+    violations.push({
+      rule: 'turn-id-count-exceeded',
+      target: 'seenTurnIds',
+      message: `Seen turn IDs exceed bound ${bounds.maxSeenTurnIds}`
+    })
+  }
+  if (state.turnRecords.length > bounds.maxTurnRecords) {
+    violations.push({
+      rule: 'turn-record-count-exceeded',
+      target: 'turnRecords',
+      message: `Turn records exceed bound ${bounds.maxTurnRecords}`
+    })
+  }
+  for (const rec of state.turnRecords) {
+    if (rec.userText.length > 2000) {
+      violations.push({
+        rule: 'turn-record-text-too-long',
+        target: rec.turnId,
+        message: `Turn record userText exceeds 2000 chars`
+      })
+      break
+    }
+  }
+  for (const [slotKey, slot] of state.intake) {
+    const def = getSlotDef(slotKey)
+    if (!def) {
+      violations.push({
+        rule: 'unknown-intake-slot',
+        target: slotKey,
+        message: `Unknown intake slot '${slotKey}'`
+      })
+      continue
+    }
+    // An unanswered slot (value === undefined) is legitimate; only validate
+    // once a value has been committed.
+    if (slot.value !== undefined) {
+      const parsed = validateSlotValue(def, slot.value)
+      if (!parsed.ok) {
+        violations.push({
+          rule: 'intake-slot-value',
+          target: slotKey,
+          message: parsed.message
+        })
+      }
+    }
+    if (slot.confidence < 0 || slot.confidence > 1 || !Number.isFinite(slot.confidence)) {
+      violations.push({
+        rule: 'intake-confidence',
+        target: slotKey,
+        message: `Intake confidence for '${slotKey}' must be between 0 and 1`
+      })
+    }
+    if (slot.asked > 2) {
+      violations.push({
+        rule: 'intake-asked-exceeded',
+        target: slotKey,
+        message: `Slot '${slotKey}' asked more than twice`
+      })
+    }
+    if (slot.superseded.length > 3) {
+      violations.push({
+        rule: 'intake-superseded-exceeded',
+        target: slotKey,
+        message: `Slot '${slotKey}' keeps more than three superseded values`
+      })
+    }
+  }
+
+  // ── Intake v4 invariants ────────────────────────────────────────────
+
+  // Project-level facts bound.
+  if (state.facts.size > bounds.maxFacts) {
+    violations.push({
+      rule: 'fact-count-exceeded',
+      target: 'facts',
+      message: `Project-level facts exceed bound ${bounds.maxFacts}`
+    })
+  }
+
+  // Validate each IntakeFact field.
+  for (const [factId, fact] of state.facts) {
+    if (fact.question.length < 1 || fact.question.length > 280) {
+      violations.push({
+        rule: 'fact-question-too-long',
+        target: factId,
+        message: `Fact question must be 1..280 chars`
+      })
+    }
+    if (fact.answer.length < 1 || fact.answer.length > bounds.maxFactAnswer) {
+      violations.push({
+        rule: 'fact-answer-too-long',
+        target: factId,
+        message: `Fact answer must be 1..${bounds.maxFactAnswer} chars`
+      })
+    }
+    if (fact.confidence < 0 || fact.confidence > 1 || !Number.isFinite(fact.confidence)) {
+      violations.push({
+        rule: 'fact-confidence',
+        target: factId,
+        message: `Fact confidence must be between 0 and 1`
+      })
+    }
+    if (fact.superseded.length > 3) {
+      violations.push({
+        rule: 'fact-superseded-exceeded',
+        target: factId,
+        message: `Fact '${factId}' keeps more than three superseded values`
+      })
+    }
+    // Evidence must be 'user' (UI edit) or an exact substring of the turn text.
+    if (fact.evidence !== 'user') {
+      const turn = state.turnRecords.find((r) => r.turnId === fact.turnId)
+      const turnText = turn ? turn.userText : ''
+      if (!turnText.includes(fact.evidence)) {
+        violations.push({
+          rule: 'fact-evidence',
+          target: factId,
+          message: `Fact evidence is not an exact substring of the user turn`
+        })
+      }
+    }
+  }
+
+  // Per-page intake validation.
+  for (const [pageId, pageIntake] of state.pageIntake) {
+    if (!state.pages.has(pageId)) {
+      violations.push({
+        rule: 'page-intake-dangling-page',
+        target: pageId,
+        message: `Page intake references missing page ${pageId}`
+      })
+      continue
+    }
+    if (pageIntake.facts.size > bounds.maxFacts) {
+      violations.push({
+        rule: 'page-fact-count-exceeded',
+        target: pageId,
+        message: `Page intake facts for ${pageId} exceed bound ${bounds.maxFacts}`
+      })
+    }
+    for (const [factId, fact] of pageIntake.facts) {
+      if (fact.question.length < 1 || fact.question.length > 280) {
+        violations.push({
+          rule: 'page-fact-question-too-long',
+          target: factId,
+          message: `Fact question must be 1..280 chars`
+        })
+      }
+      if (fact.answer.length < 1 || fact.answer.length > bounds.maxFactAnswer) {
+        violations.push({
+          rule: 'page-fact-answer-too-long',
+          target: factId,
+          message: `Fact answer must be 1..${bounds.maxFactAnswer} chars`
+        })
+      }
+      if (fact.confidence < 0 || fact.confidence > 1 || !Number.isFinite(fact.confidence)) {
+        violations.push({
+          rule: 'page-fact-confidence',
+          target: factId,
+          message: `Fact confidence must be between 0 and 1`
+        })
+      }
+      if (fact.superseded.length > 3) {
+        violations.push({
+          rule: 'page-fact-superseded-exceeded',
+          target: factId,
+          message: `Fact '${factId}' keeps more than three superseded values`
+        })
+      }
+      if (fact.evidence !== 'user') {
+        const turn = state.turnRecords.find((r) => r.turnId === fact.turnId)
+        const turnText = turn ? turn.userText : ''
+        if (!turnText.includes(fact.evidence)) {
+          violations.push({
+            rule: 'page-fact-evidence',
+            target: factId,
+            message: `Fact evidence is not an exact substring of the user turn`
+          })
+        }
+      }
+    }
+  }
+
+  // intakeStatus.pages keys must reference existing pages.
+  for (const [pageId] of state.intakeStatus.pages) {
+    if (!state.pages.has(pageId)) {
+      violations.push({
+        rule: 'intake-status-dangling-page',
+        target: pageId,
+        message: `Intake status references missing page ${pageId}`
+      })
+    }
+  }
+
+  // intakeRev and nextFactSeq must be finite and non-negative.
+  if (!Number.isFinite(state.intakeRev) || state.intakeRev < 0) {
+    violations.push({
+      rule: 'intake-rev-invalid',
+      target: 'intakeRev',
+      message: `Intake rev must be a finite non-negative number`
+    })
+  }
+  if (!Number.isFinite(state.nextFactSeq) || state.nextFactSeq < 0) {
+    violations.push({
+      rule: 'next-fact-seq-invalid',
+      target: 'nextFactSeq',
+      message: `Next fact seq must be a finite non-negative number`
+    })
+  }
+
+  // Page spec stale detection: basedOnIntakeRev must not exceed intakeRev.
+  for (const [pageId, spec] of state.pageSpecs) {
+    if (spec.basedOnIntakeRev > state.intakeRev) {
+      violations.push({
+        rule: 'spec-stale',
+        target: pageId,
+        message: `Page spec for ${pageId} is based on intake rev ${spec.basedOnIntakeRev}, current is ${state.intakeRev}`
+      })
+    }
+    // Status must be a valid value (Zod enforces this, but double-check).
+    if (spec.status !== 'draft' && spec.status !== 'approved') {
+      violations.push({
+        rule: 'spec-status-invalid',
+        target: pageId,
+        message: `Page spec for ${pageId} has invalid status '${spec.status}'`
+      })
+    }
   }
 
   return violations

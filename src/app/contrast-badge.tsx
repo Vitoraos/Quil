@@ -33,13 +33,13 @@ export function ContrastBadge({
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 6,
-        padding: '4px 8px',
-        borderRadius: 6,
-        fontSize: 12,
-        background: pass ? '#dcfce7' : '#fee2e2',
-        color: pass ? '#166534' : '#991b1b',
-        border: `1px solid ${pass ? '#86efac' : '#fecaca'}`
+        gap: 'var(--quil-space-1)',
+        padding: 'var(--quil-space-1) var(--quil-space-2)',
+        borderRadius: 'var(--quil-radius-sm)',
+        fontSize: 'var(--quil-text-xs)',
+        background: pass ? 'var(--quil-success-bg)' : 'var(--quil-danger-bg)',
+        color: pass ? 'var(--quil-success-text)' : 'var(--quil-danger-text)',
+        border: `var(--quil-border-width) solid ${pass ? 'var(--quil-success-line)' : 'var(--quil-danger-line)'}`
       }}
     >
       <span>Contrast {ratio.toFixed(2)}:1</span>

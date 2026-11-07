@@ -6,19 +6,12 @@
 
 import * as React from 'react'
 import { useSyncExternalStore } from 'react'
-import type { DesignElement, ElementId, NodeKind, PageId, ProjectState, ResolvedProps } from '../core'
+import type { ElementId, NodeKind, PageId, ProjectState } from '../core'
 import { QuilStore } from './store'
 import { createResolver } from './resolve'
 import type { Candidate } from '../core/generation'
 
 const resolver = createResolver()
-
-function px(v: unknown): string | undefined {
-  if (v && typeof v === 'object' && 'value' in v) {
-    return `${(v as { value: number }).value}px`
-  }
-  return undefined
-}
 
 function toStyle(kind: NodeKind, props: Record<string, unknown>): React.CSSProperties {
   const s: React.CSSProperties = {}
@@ -57,7 +50,7 @@ function renderElement(
   text: string,
   childIds: ElementId[]
 ): React.ReactElement {
-  const children = isTextKind(kind) ? null : childIds.map((cid) => (
+  const _children = isTextKind(kind) ? null : childIds.map((cid) => (
     <span key={String(cid)} data-element-id={String(cid)} />
   ))
   switch (kind) {

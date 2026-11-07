@@ -1,0 +1,126 @@
+/* Quil design tokens — LIGHT THEME (v2, 4 Nov 2026)
+ *
+ * Every colour, type size, space, radius, shadow and duration lives here.
+ * Components must NOT contain raw colours, font sizes or shadows — they
+ * reference these custom properties only.
+ *
+ * Palette: light theme. Background #fafafa, text #02040d, button #0054a3,
+ * button text #ffffff. Text intensity is colour tone, never opacity.
+ * One accent: blue #0054a3.
+ *
+ * CHANGE: dark monochrome + violet (#0A0A0C / #8B5CF6) was replaced with
+ * this light palette. This is a deliberate design decision, not an oversight.
+ * All references to --quil-accent now resolve to the blue button colour.
+ */
+
+:root {
+  /* ---------- Backgrounds (light theme) ---------- */
+  --quil-bg: #fafafa;
+  --quil-surface: #ffffff;
+  --quil-surface-hover: #f1f1f3;
+  --quil-line: #e3e3e5;
+
+  /* ---------- Text intensity — colour tone, never opacity ---------- */
+  --quil-text-100: #02040d;
+  --quil-text-95: #1a1a1f;
+  --quil-text-90: #2c2c31;
+  --quil-text-85: #3d3d42;
+  --quil-text-80: #4e4e53;
+  --quil-text-75: #5f5f64;
+  --quil-text-70: #707075;
+
+  /* ---------- Single accent: blue #0054a3 ---------- */
+  --quil-accent: #0054a3;
+  --quil-accent-hover: #00438a;
+
+  /* Label colour on the accent — contract requires var(--bg) */
+  --quil-accent-text: #ffffff;
+
+  /* ---------- Button fill + label (explicit, not derived) ---------- */
+  --quil-button: #0054a3;
+  --quil-button-text: #ffffff;
+
+  /* ---------- Fonts ---------- */
+  --quil-font-ui: 'Inter', system-ui, sans-serif;
+  --quil-font-head: 'Archivo', system-ui, sans-serif;
+
+  /* ---------- Type scale ---------- */
+  --quil-text-xs: 0.75rem;
+  --quil-text-sm: 0.875rem;
+  --quil-text-base: 1rem;
+  --quil-text-lg: 1.125rem;
+  --quil-text-xl: 1.25rem;
+
+  --quil-heading-1: 2.25rem;
+  --quil-heading-2: 1.875rem;
+  --quil-heading-3: 1.5rem;
+  --quil-heading-4: 1.25rem;
+
+  /* ---------- Spacing ---------- */
+  --quil-space-0-5: 0.125rem;
+  --quil-space-1: 0.25rem;
+  --quil-space-2: 0.5rem;
+  --quil-space-3: 0.75rem;
+  --quil-space-4: 1rem;
+  --quil-space-5: 1.25rem;
+  --quil-space-6: 1.5rem;
+  --quil-space-8: 2rem;
+  --quil-space-10: 2.5rem;
+  --quil-space-12: 3rem;
+  --quil-space-16: 4rem;
+  --quil-space-24: 6rem;
+
+  /* ---------- Radius ---------- */
+  --quil-radius-sm: 6px;
+  --quil-radius-md: 10px;
+  --quil-radius-lg: 12px;
+
+  /* ---------- Border width ---------- */
+  --quil-border-width: 1px;
+
+  /* ---------- Shadow — light theme, no hard 3px edge ---------- */
+  --quil-shadow-1: 0 1px 2px rgba(2, 4, 13, 0.08);
+  --quil-shadow-2: 0 4px 6px rgba(2, 4, 13, 0.08);
+  --quil-shadow-3: 0 3px 0 rgba(2, 4, 13, 0.10);
+
+  /* ---------- Press distance (mechanical button press REMOVED) ---------- */
+  --quil-press: 0px;
+  --quil-edge: 0px;
+
+  /* ---------- Duration ---------- */
+  --quil-duration-press: 100ms;
+  --quil-duration-fast: 100ms;
+
+  /* ---------- Minimum touch targets ---------- */
+  --quil-target-min: 44px;
+  --quil-target-icon: 40px;
+
+  /* ---------- Focus / overlays ---------- */
+  --quil-focus-ring: 2px solid var(--quil-accent);
+  --quil-overlay: rgba(2, 4, 13, 0.4);
+  --quil-backdrop: rgba(2, 4, 13, 0.5);
+
+  /* ---------- Status: error (danger) ---------- */
+  --quil-danger-bg: #fee2e2;
+  --quil-danger-text: #991b1b;
+  --quil-danger-line: #fecaca;
+
+  /* ---------- Status: warning (stale) ---------- */
+  --quil-warning-bg: #fef3c7;
+  --quil-warning-text: #92400e;
+  --quil-warning-line: #fcd34d;
+  --quil-warning-border: #d97706;
+
+  /* ---------- Status: success (passing contrast / valid) ---------- */
+  --quil-success-bg: #dcfce7;
+  --quil-success-text: #166534;
+  --quil-success-line: #86efac;
+  --quil-success-strong: #16a34a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --quil-duration-press: 0ms;
+    --quil-duration-fast: 0ms;
+  }
+}

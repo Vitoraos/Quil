@@ -1,8 +1,8 @@
 import { z } from 'zod'
-import { elementKinds } from './elements'
-import { candidateIdSchema, commandIdSchema, elementIdSchema, pageIdSchema } from './ids'
-import type { DecisionScope } from './state'
+import { elementKinds, nodeKindSchema } from './elements'
+import { candidateIdSchema, commandIdSchema, elementIdSchema, factIdSchema, pageIdSchema } from './ids'
 import { pageSpecSchema } from './specs'
+import { specOpSchema } from './spec-ops'
 import { briefValue, shortTextValue } from './values'
 
 export const elementKindSchema = z.enum([...elementKinds])
@@ -15,22 +15,28 @@ export const decisionScopeSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('page'),
       pageId: pageIdSchema,
-      targetType: elementKindSchema
+      targetType: nodeKindSchema
     })
     .strict(),
   z
     .object({
       kind: z.literal('global'),
-      targetType: elementKindSchema
+      targetType: nodeKindSchema
     })
     .strict()
 ])
 
 export type DecisionScopeInput = z.infer<typeof decisionScopeSchema>
 
+export const intakeScopeSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('project') }).strict(),
+  z.object({ kind: z.literal('page'), pageId: pageIdSchema }).strict()
+])
+
 export const commandErrorCodes = [
   'INVALID_COMMAND',
   'STALE_BASE',
+  'STALE_SPEC',
   'TARGET_MISSING',
   'PARENT_MISSING',
   'PARENT_LEAF',
@@ -48,7 +54,9 @@ export const commandErrorCodes = [
   'DECISION_CONFLICT',
   'DECISION_TARGET_UNKNOWN',
   'DECISION_DUPLICATE',
-  'CANDIDATE_INVALID'
+  'CANDIDATE_INVALID',
+  'SPEC_OP_FAILED',
+  'CONFLICT_NEEDS_CONFIRMATION'
 ] as const
 
 export type CommandErrorCode = (typeof commandErrorCodes)[number]
@@ -81,6 +89,17 @@ export const addElementCommandSchema = z
     elementId: elementIdSchema,
     parentId: elementIdSchema,
     kind: z.enum([...elementKinds, 'section']),
+    props: z.record(z.unknown())
+  })
+  .strict()
+
+export const addSectionCommandSchema = z
+  .object({
+    type: z.literal('add_section'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    sectionId: elementIdSchema,
+    pageId: pageIdSchema,
     props: z.record(z.unknown())
   })
   .strict()
@@ -123,7 +142,8 @@ export const applyCandidateCommandSchema = z
           .strict()
       )
       .min(1)
-      .max(20)
+      .max(20),
+    scope: z.lazy(() => decisionScopeSchema).optional()
   })
   .strict()
 
@@ -157,6 +177,116 @@ export const setIntakeAnswerCommandSchema = z
     baseRev: z.number().int().nonnegative(),
     questionId: shortTextValue,
     answer: shortTextValue
+  })
+  .strict()
+
+export const applyIntakeUpdateCommandSchema = z
+  .object({
+    type: z.literal('apply_intake_update'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    scope: z.lazy(() => intakeScopeSchema).optional(),
+    updates: z
+      .array(
+        z
+          .object({
+            slot: z.string().min(1).max(64),
+            value: z.unknown(),
+            basis: z.enum(['stated', 'inferred']),
+            confidence: z.number().min(0).max(1),
+            evidence: shortTextValue
+          })
+          .strict()
+      )
+      .max(8),
+    facts: z
+      .array(
+        z
+          .object({
+            id: factIdSchema,
+            topic: z.string().min(1).max(64),
+            question: shortTextValue,
+            answer: z.string().min(1).max(500),
+            basis: z.enum(['stated', 'inferred']),
+            confidence: z.number().min(0).max(1),
+            evidence: shortTextValue,
+            turnId: shortTextValue.nullable(),
+            superseded: z.array(z.unknown()).max(3)
+          })
+          .strict()
+      )
+      .max(6)
+      .optional(),
+    askedSlots: z.array(shortTextValue).max(12),
+    asked: z
+      .object({
+        mode: z.enum(['model', 'fallback']),
+        kind: z.literal('ask'),
+        target: z.discriminatedUnion('type', [
+          z.object({ type: z.literal('slot'), slots: z.array(shortTextValue).min(1).max(2) }),
+          z.object({ type: z.literal('topic'), topic: z.string().min(1).max(64) })
+        ]),
+        question: shortTextValue,
+        options: z.array(shortTextValue).max(5),
+        why: shortTextValue
+      })
+      .strict()
+      .optional(),
+    turnId: shortTextValue,
+    userText: z.string().max(2000)
+  })
+  .strict()
+
+export const setIntakeSlotCommandSchema = z
+  .object({
+    type: z.literal('set_intake_slot'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    scope: z.lazy(() => intakeScopeSchema),
+    slot: z.string().min(1).max(64),
+    value: z.unknown()
+  })
+  .strict()
+
+export const editIntakeFactCommandSchema = z
+  .object({
+    type: z.literal('edit_intake_fact'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    scope: z.lazy(() => intakeScopeSchema),
+    factId: factIdSchema,
+    answer: z.string().min(1).max(500).nullable()
+  })
+  .strict()
+
+export const confirmIntakeCommandSchema = z
+  .object({
+    type: z.literal('confirm_intake'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    scope: z.lazy(() => intakeScopeSchema)
+  })
+  .strict()
+
+export const editPageSpecCommandSchema = z
+  .object({
+    type: z.literal('edit_page_spec'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    pageId: pageIdSchema,
+    baseSpecVersion: z.number().int().positive(),
+    ops: z.array(specOpSchema).min(1).max(20),
+    confirmOrphans: z.boolean().optional()
+  })
+  .strict()
+
+export const approvePageSpecCommandSchema = z
+  .object({
+    type: z.literal('approve_page_spec'),
+    commandId: commandIdSchema,
+    baseRev: z.number().int().nonnegative(),
+    pageId: pageIdSchema,
+    baseSpecVersion: z.number().int().positive()
   })
   .strict()
 
@@ -220,6 +350,7 @@ export const instantiateSpecSkeletonCommandSchema = z
 export const leafCommandSchema = z.discriminatedUnion('type', [
   setPropertyCommandSchema,
   addElementCommandSchema,
+  addSectionCommandSchema,
   removeElementCommandSchema,
   moveElementCommandSchema,
   applyCandidateCommandSchema,
@@ -227,11 +358,17 @@ export const leafCommandSchema = z.discriminatedUnion('type', [
   redoCommandSchema,
   setBriefCommandSchema,
   setIntakeAnswerCommandSchema,
+  applyIntakeUpdateCommandSchema,
+  setIntakeSlotCommandSchema,
+  editIntakeFactCommandSchema,
+  confirmIntakeCommandSchema,
   addPageCommandSchema,
   removePageCommandSchema,
   renamePageCommandSchema,
   setStartingPageCommandSchema,
   setPageSpecCommandSchema,
+  editPageSpecCommandSchema,
+  approvePageSpecCommandSchema,
   instantiateSpecSkeletonCommandSchema
 ])
 
@@ -246,6 +383,7 @@ export const batchCommandSchema = z
 export const designCommandSchema = z.discriminatedUnion('type', [
   setPropertyCommandSchema,
   addElementCommandSchema,
+  addSectionCommandSchema,
   removeElementCommandSchema,
   moveElementCommandSchema,
   applyCandidateCommandSchema,
@@ -254,11 +392,17 @@ export const designCommandSchema = z.discriminatedUnion('type', [
   batchCommandSchema,
   setBriefCommandSchema,
   setIntakeAnswerCommandSchema,
+  applyIntakeUpdateCommandSchema,
+  setIntakeSlotCommandSchema,
+  editIntakeFactCommandSchema,
+  confirmIntakeCommandSchema,
   addPageCommandSchema,
   removePageCommandSchema,
   renamePageCommandSchema,
   setStartingPageCommandSchema,
   setPageSpecCommandSchema,
+  editPageSpecCommandSchema,
+  approvePageSpecCommandSchema,
   instantiateSpecSkeletonCommandSchema
 ])
 
@@ -266,6 +410,7 @@ export type LeafCommand = z.infer<typeof leafCommandSchema>
 export type DesignCommand = z.infer<typeof designCommandSchema>
 export type SetPropertyCommand = z.infer<typeof setPropertyCommandSchema>
 export type AddElementCommand = z.infer<typeof addElementCommandSchema>
+export type AddSectionCommand = z.infer<typeof addSectionCommandSchema>
 export type RemoveElementCommand = z.infer<typeof removeElementCommandSchema>
 export type MoveElementCommand = z.infer<typeof moveElementCommandSchema>
 export type ApplyCandidateCommand = z.infer<typeof applyCandidateCommandSchema>
@@ -280,3 +425,9 @@ export type RenamePageCommand = z.infer<typeof renamePageCommandSchema>
 export type SetStartingPageCommand = z.infer<typeof setStartingPageCommandSchema>
 export type SetPageSpecCommand = z.infer<typeof setPageSpecCommandSchema>
 export type InstantiateSpecSkeletonCommand = z.infer<typeof instantiateSpecSkeletonCommandSchema>
+export type ApplyIntakeUpdateCommand = z.infer<typeof applyIntakeUpdateCommandSchema>
+export type SetIntakeSlotCommand = z.infer<typeof setIntakeSlotCommandSchema>
+export type EditIntakeFactCommand = z.infer<typeof editIntakeFactCommandSchema>
+export type ConfirmIntakeCommand = z.infer<typeof confirmIntakeCommandSchema>
+export type EditPageSpecCommand = z.infer<typeof editPageSpecCommandSchema>
+export type ApprovePageSpecCommand = z.infer<typeof approvePageSpecCommandSchema>

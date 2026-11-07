@@ -1,55 +1,36 @@
-import type { ElementId, NodeKind } from '../core'
+import type { ElementId } from '../core'
 import { elementIdSchema } from '../core'
 import type { QuilStore } from './store'
+import { newCommandId } from './command-id'
+import { baseResizeValue, clampResize, cssPropertyFor, resizeHandles, resizeValueFor, type ResizeProperty } from './resize'
 
 /**
- * Pointer gesture layer. During a gesture the document store is NEVER touched:
- * feedback is written only to the ephemeral gesture layer (inside rAF). On
- * release, exactly ONE coalesced `set_property` (with `gestureId`) is committed
- * through the command bus. Escape / pointercancel / lost capture / blur /
- * window resize abort cleanly with no state change.
+ * Handle-driven resize layer. During a drag the commit is written to the element's own
+ * inline style (ephemeral, never the document); on release ONE coalesced set_property
+ * is dispatched. Escape / pointercancel / lost capture / blur / resize abort and restore.
  */
-interface Gesture {
+interface ResizeGesture {
   pointerId: number
   elementId: ElementId
-  property: string | null
-  start: number | null
+  property: ResizeProperty
+  sign: 1 | -1
+  min: number
+  max: number
+  start: number
   startX: number
   startY: number
   lastX: number
-  ghost: HTMLDivElement | null
+  lastY: number
+  target: HTMLElement
+  restoreValue: string
+  restorePriority: string
   raf: number | null
+  applied: boolean
 }
 
-// Must match each property's Zod bounds in core/values + core/elements.
-const SCRUB_BOUNDS: Record<string, { min: number; max: number }> = {
-  width: { min: 1, max: 10000 },
-  height: { min: 1, max: 10000 },
-  padding: { min: 0, max: 4096 }
-}
-
-/** The one geometric property a horizontal canvas scrub can adjust, per kind. */
-function scrubProperty(kind: NodeKind): string | null {
-  switch (kind) {
-    case 'image':
-      return 'width'
-    case 'section':
-    case 'card':
-      return 'padding'
-    default:
-      return null
-  }
-}
-
-function baseScrubValue(props: Record<string, unknown>, property: string): number | null {
-  const raw = props[property]
-  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
-}
-
-function clampedScrubValue(property: string, start: number, dx: number): number | null {
-  const b = SCRUB_BOUNDS[property]
-  if (!b) return null
-  return Math.min(Math.max(Math.round(start + dx), b.min), b.max)
+function deltaFor(property: ResizeProperty, dx: number, dy: number, sign: 1 | -1): number {
+  const axis = property === 'height' || property === 'fontSize' ? dy : dx
+  return Math.round(axis * sign)
 }
 
 export function attachGestures(
@@ -57,10 +38,19 @@ export function attachGestures(
   store: QuilStore,
   getZoom: () => number = () => 1
 ): () => void {
-  let gesture: Gesture | null = null
+  let gesture: ResizeGesture | null = null
   let gestureSeq = 0
 
-  function end(commit: boolean, dx: number, dy: number): void {
+  function restore(g: ResizeGesture): void {
+    if (!g.applied) return
+    const css = cssPropertyFor(g.property)
+    // Put back whatever React had written; removing it would drop the prop's style.
+    if (g.restoreValue) g.target.style.setProperty(css, g.restoreValue, g.restorePriority)
+    else g.target.style.removeProperty(css)
+    g.applied = false
+  }
+
+  function end(commit: boolean): void {
     const g = gesture
     gesture = null
     if (!g) return
@@ -68,80 +58,84 @@ export function attachGestures(
       cancelAnimationFrame(g.raf)
       g.raf = null
     }
-    g.ghost?.remove()
-    if (!commit || g.property === null || g.start === null) return
-    if (dx === 0 && dy === 0) return
-    const value = clampedScrubValue(g.property, g.start, dx / Math.max(getZoom(), 0.25))
-    if (value === null) return
+    const zoom = Math.max(getZoom(), 0.25)
+    const value = clampResize(
+      g.min,
+      g.max,
+      g.start + deltaFor(g.property, (g.lastX - g.startX) / zoom, (g.lastY - g.startY) / zoom, g.sign)
+    )
+    restore(g)
+    if (!commit || value === g.start) return
     store.dispatch({
       type: 'set_property',
-      commandId: `cmd-gesture-${++gestureSeq}` as never,
+      commandId: newCommandId('resize'),
       baseRev: store.getState().rev,
       targetId: g.elementId,
       property: g.property,
-      value,
+      value: resizeValueFor(g.property, value),
       gestureId: `gesture-${gestureSeq}` as never
     })
   }
 
-  function paint(): void {
-    const g = gesture
-    if (!g || g.ghost === null || g.start === null || g.property === null) return
-    const projected = clampedScrubValue(g.property, g.start, (g.lastX - g.startX) / Math.max(getZoom(), 0.25))
-    g.ghost.textContent = projected === null ? `${g.property} — scrub unavailable` : `${g.property} → ${projected}`
+  function preview(g: ResizeGesture, value: number): void {
+    g.target.style.setProperty(cssPropertyFor(g.property), `${value}px`)
+    g.applied = true
   }
 
-  function schedulePaint(): void {
-    const g = gesture
-    // shortcut: no live resize preview on the committed element, only the ghost
-    // text — upgrade when the renderer exposes per-element gesture transforms.
-    if (!g || g.ghost === null || g.raf !== null) return
+  function schedule(g: ResizeGesture, dx: number, dy: number): void {
+    if (g.raf !== null) return
     g.raf = requestAnimationFrame(() => {
-      const current = gesture
-      if (!current) return
-      current.raf = null
-      paint()
+      if (gesture !== g) return
+      g.raf = null
+      const next = clampResize(g.min, g.max, g.start + deltaFor(g.property, dx, dy, g.sign))
+      preview(g, next)
     })
   }
 
-  function makeGhost(): HTMLDivElement {
-    const layer = root.querySelector('[data-layer="gesture"]')
-    const ghost = document.createElement('div')
-    ghost.setAttribute('data-gesture-ghost', '')
-    ghost.style.cssText =
-      'position:absolute;left:8px;top:8px;padding:4px 10px;border-radius:8px;' +
-      'outline:2px solid var(--quil-accent, #7C3AED);background:var(--quil-surface, #141418);' +
-      'color:var(--quil-text-100, #F5F3EC);font:12px system-ui;'
-    ;(layer ?? root).appendChild(ghost)
-    return ghost
-  }
-
   function onDown(e: PointerEvent): void {
-    if (gesture) return // a gesture is active: primary wins, secondary pointers ignored
-    const target = e.target instanceof Element ? e.target.closest('[data-element-id]') : null
-    if (!(target instanceof HTMLElement)) return
-    const parsedId = elementIdSchema.safeParse(target.getAttribute('data-element-id') ?? '')
+    if (gesture) return // primary wins, secondary pointers ignored
+    const handle = e.target instanceof Element ? e.target.closest('[data-resize-property]') : null
+    if (!handle) return
+    const holder = handle.closest('[data-resize-element]')
+    if (!(holder instanceof HTMLElement)) return
+    const parsedId = elementIdSchema.safeParse(holder.getAttribute('data-resize-element') ?? '')
     if (!parsedId.success) return
+    const target = root.querySelector(`[data-element-id="${String(parsedId.data)}"]`)
+    if (!(target instanceof HTMLElement)) return
     const element = store.getState().nodes.get(parsedId.data as ElementId)
     if (!element) return
 
-    const property = scrubProperty(element.kind)
-    const start = property ? baseScrubValue(element.props, property) : null
+    const property = handle.getAttribute('data-resize-property') as ResizeProperty | null
+    if (!property) return
+    const edge = handle.getAttribute('data-handle-edge')
+    const spec = resizeHandles(element.kind).find((h) => h.property === property && h.edge === edge)
+    if (!spec) return
+    const start = baseResizeValue(element.props, property)
+    if (start === null) return
+
     try {
-      target.setPointerCapture(e.pointerId)
+      ;(handle as HTMLElement).setPointerCapture(e.pointerId)
     } catch {
-      // jsdom (and some browsers) reject capture for unregistered pointer ids; carry on.
+      // jsdom rejects capture for unregistered pointer ids; carry on.
     }
+    gestureSeq += 1
     gesture = {
       pointerId: e.pointerId,
       elementId: parsedId.data as ElementId,
-      property: start === null ? null : property,
+      property,
+      sign: spec.sign,
+      min: spec.min,
+      max: spec.max,
       start,
       startX: e.clientX,
       startY: e.clientY,
       lastX: e.clientX,
-      ghost: start !== null ? makeGhost() : null,
-      raf: null
+      lastY: e.clientY,
+      target,
+      restoreValue: target.style.getPropertyValue(cssPropertyFor(property)),
+      restorePriority: target.style.getPropertyPriority(cssPropertyFor(property)),
+      raf: null,
+      applied: false
     }
   }
 
@@ -149,26 +143,30 @@ export function attachGestures(
     const g = gesture
     if (!g || g.pointerId !== e.pointerId) return
     g.lastX = e.clientX
-    schedulePaint()
+    g.lastY = e.clientY
+    const zoom = Math.max(getZoom(), 0.25)
+    schedule(g, (e.clientX - g.startX) / zoom, (e.clientY - g.startY) / zoom)
   }
 
   function onUp(e: PointerEvent): void {
     const g = gesture
     if (!g || g.pointerId !== e.pointerId) return
-    end(true, e.clientX - g.startX, e.clientY - g.startY)
+    g.lastX = e.clientX
+    g.lastY = e.clientY
+    end(true)
   }
 
   function onCancel(e: PointerEvent): void {
-    if (gesture?.pointerId === e.pointerId) end(false, 0, 0)
+    if (gesture?.pointerId === e.pointerId) end(false)
   }
 
   function onKey(e: KeyboardEvent): void {
-    if (e.key === 'Escape' && gesture) end(false, 0, 0)
+    if (e.key === 'Escape' && gesture) end(false)
   }
 
-  const abort = (): void => end(false, 0, 0)
+  const abort = (): void => end(false)
   function onLostCapture(e: PointerEvent): void {
-    if (gesture?.pointerId === e.pointerId) end(false, 0, 0)
+    if (gesture?.pointerId === e.pointerId) end(false)
   }
 
   root.addEventListener('pointerdown', onDown)
@@ -181,7 +179,7 @@ export function attachGestures(
   window.addEventListener('lostpointercapture', onLostCapture, true)
 
   return () => {
-    end(false, 0, 0)
+    end(false)
     root.removeEventListener('pointerdown', onDown)
     root.removeEventListener('pointermove', onMove)
     root.removeEventListener('pointerup', onUp)

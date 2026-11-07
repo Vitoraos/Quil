@@ -24,7 +24,7 @@ Architecture principles (from `AGENTS.md`):
 | `core/values.ts` | Per-property value validators: `colorValue` (hex/oklch), `fontSizeValue`, `spacingValue`, `radiusValue`, `fontWeightValue`, `alignValue`, `fitValue`, `shadowValue`, `textValue` (bans control/RTL chars). |
 | `core/elements.ts` | Per-element-kind Zod props schemas (`propsSchemas`) for `heading`, `text`, `image`, `button`, `card`, `navigation`, `form`, `section`. |
 | `core/state.ts` | `ProjectState`, `DesignElement`, `Page`, `DesignDecision`, `DecisionScope`, `Asset`, `HistoryEntry`, bounds constants, `createProjectState`. |
-| `core/commands.ts` | Zod strict command schemas (`set_property`, `add_element`, `remove_element`, `move_element`, `apply_candidate`, `undo`, `redo`, `batch`), command error codes, `DesignCommand` union. |
+| `core/commands.ts` | Zod strict command schemas (`set_property`, `add_element`, `add_section`, `remove_element`, `move_element`, `apply_candidate`, `undo`, `redo`, `batch`), command error codes, `DesignCommand` union. |
 | `core/apply.ts` | `applyCommand(state, command)` — the single command bus. Returns `ApplyResult` (`{ok, state, patches, inversePatches, changedIds}` or `{ok, error}`). Immer `produceWithPatches` for patches/inverse patches (undo for free). Command idempotency, base-rev staleness, gesture coalescing, batch atomicity, undo/redo stacks. Invariant validation via `validateProject`. |
 | `core/validate.ts` | `validateProject(state)` — invariant checker: acyclic tree, no orphans, no dangling references, unique ids, bounds, property-schema validity, decision orphan/dangling checks, decision zero-match reporting. |
 | `core/decisions/registry.ts` | Decision lifecycle: create (monotonic seq), approve, supersede (superseded stay in history), lookup by target & scope, `decisionZeroMatchReport`. |
@@ -46,11 +46,21 @@ Architecture principles (from `AGENTS.md`):
 | `src/app/scope-picker.tsx` | `ScopePicker` — plain-language effect text + live count of affected elements (computed via resolver). Hides meaningless choices per property. |
 | `src/app/drift-badge.tsx` | `DriftBadge` — signals when a hand edit deviates from an approved decision; offers "keep as instance override" or "propose changing the decision"; nothing changes a decision without approval. |
 | `src/app/contrast-badge.tsx` | `ContrastBadge` — WCAG contrast ratio computed in code via `culori`; pass/fail against WCAG AA (4.5:1) / AAA (7:1). |
-| `src/app/App.tsx` | Composition root: canvas + tools panel + inspector + scope picker + drift/contrast badges + zoom controls + save status + read-only banner + recovery screen + preview overlay. Starts from `emptyProject()`; with no pages it shows the brief prompt and routes to intake. Pages are generic — any site, any page names. |
+| `src/app/editor.tsx` | Editor composition root: canvas, tools panel, inspector, scope picker, drift/contrast badges, selection overlay, colour picker, insert menu, layers/decisions panels, command palette, zoom/pan viewport, save status, read-only banner, recovery screen, preview overlay and the global keymap. Starts from `emptyProject()`; with no pages it shows the brief prompt and routes to intake. Pages are generic — any site, any page names. |
 | `src/app/index.tsx` | React entry point. |
 | `src/app/save-status.tsx` | Save status indicator: `saved`/`saving`/`unsaved`/`error` with dot pulse, subscribed via `store.onSaveStatus`. |
 | `src/app/read-only-banner.tsx` | Read-only banner shown on non-leader tabs (multi-tab Web Locks follower). |
 | `src/app/recovery-screen.tsx` | Recovery screen for migration/corruption failures: retry, export project, dismiss. |
+| `src/app/selection-overlay.tsx` | Selection + hover outlines written straight to the DOM, plus one resize handle per property the selected kind supports. |
+| `src/app/resize.ts` | Pure handle table (`resizeHandles`), bounds clamp, prop-shape adapters and kebab-case CSS names for the live preview. |
+| `src/app/gestures.ts` | Handle-driven resize: rAF inline-style preview, ONE `set_property` on release, abort on Escape/pointercancel/lost capture/blur/resize. |
+| `src/app/text-editor.tsx` | In-place text editing overlay; Enter/blur commits one `set_property`, Escape cancels. |
+| `src/app/color-picker.tsx`, `src/app/colour.ts` | Colour group: approved decision colours first, neutral seeds, live WCAG contrast for the candidate. |
+| `src/app/insert-menu.tsx`, `src/app/element-ops.ts` | Insert allowlist of element kinds with schema-valid defaults, plus a page section root via `add_section`; image is disabled when the project has no asset. Duplicate copies any subtree (section root included) as one batch. |
+| `src/app/layers-panel.tsx` | Page outline: select and reorder siblings through `move_element`. |
+| `src/app/decisions-panel.tsx` | Read-only list of decisions with status and plain-language scope. |
+| `src/app/command-palette.tsx`, `src/app/pan.ts` | Cmd/Ctrl+K action palette with subsequence matching ("zn" finds "Zoom in"); hand/Space viewport panning captured so it never starts a select or resize, clamped to the scrollable extent. |
+| `src/app/command-id.ts` | Monotonic command/element ids that satisfy `ID_PATTERN` (timestamp ids collided inside one millisecond). |
 
 ## Persistence — Phase 4 (`src/persistence/`)
 
@@ -98,6 +108,23 @@ Architecture principles (from `AGENTS.md`):
 - `app/` composes `core/`; modules never import each other.
 - All document mutations go through the single command bus (`applyCommand`). No component writes document state directly.
 - Resolved design is derived from document + decisions; never stored as a second mutable copy.
+
+## Keyboard (editor canvas)
+
+| Key | Action |
+|-----|--------|
+| `V` | Focus the canvas (Tab then cycles elements) |
+| `Enter` / `T` | Edit the selected text element |
+| `C` | Open the colour group for the selected element |
+| `D` | Toggle the decisions list |
+| `/` | Toggle the insert menu |
+| `Delete` / `Backspace` | Remove the selection (one `remove_element`) |
+| `Ctrl/Cmd+D` | Duplicate the selection (one batch, props only; a section root is duplicated with its children) |
+| Arrow keys | Nudge the kind's primary resize property by 1px; `Shift` = 10px |
+| `H` | Toggle hand tool; hold `Space` to pan |
+| `Ctrl/Cmd+=` / `-` / `0` | Zoom in / out / reset to 100% |
+| `Ctrl/Cmd+K` | Command palette |
+| `Escape` | Clear selection or abort the active gesture |
 
 ## Running
 

@@ -1,0 +1,728 @@
+{
+  "meta": {
+    "product": "Quil",
+    "artifact": "Workspace functionality inventory — every tool, flow and state needed to rebuild the UI",
+    "version": "1.0",
+    "date": "2026-11-05",
+    "positioning": "Quil is frontend UI/UX design software for technical developers — NOT a website builder. Core theory: 'Zero Design Drift'. AI only proposes; nothing becomes design truth until the user approves it, and every approval is a scoped, undoable decision.",
+    "intended_use": "Hand this file to a frontend designer as the single source of truth for rebuilding the workspace UI. Pair it with the visual reference (quil-workspace-mockup.html) and the rationale doc (quil-redesign-spec.md).",
+    "companion_files": [
+      "quil-workspace-mockup.html — pixel reference of the rebuilt shell (porcelain #f5f0f0 on espresso #15100d theme)",
+      "quil-redesign-spec.md — full rationale, ASCII wireframes, implementation slices S1–S8"
+    ],
+    "terminology": {
+      "Screen": "A top-level artboard. UI label is always 'Screen' even though internal schema keys still say 'page' (pageId, add_section). Designers must never surface the words 'page' or 'section' in UI copy.",
+      "Frame": "A layout container on a screen (internally 'section'). Figma users think in frames.",
+      "Element": "A leaf node: heading, text, button, card, image, navigation, form.",
+      "Decision": "An approved design choice recorded in the decision registry, with a scope (Instance / Screen / Global) and provenance. Decisions supersede, they are never deleted.",
+      "Candidate": "An AI-proposed variant awaiting approval. Lives in a preview layer, never in the committed document.",
+      "Spec / Blueprint": "The structured per-screen generation contract (frame list + requirements) that drives layered generation. Rendered in product language, never raw JSON."
+    },
+    "layout_philosophy": "Three columns with a hard rule: AI on the LEFT, canvas manipulation on the RIGHT, canvas CENTRED. One line to remember: left decides, right refines, centre shows."
+  },
+
+  "global_rules": [
+    { "rule": "Approve-before-canonical", "detail": "AI output is never applied directly. Candidates preview on a separate layer; only Approve (through the scope picker) turns a candidate into decisions via the apply_candidate command. Reject/Regenerate are always available." },
+    { "rule": "One gesture = one coalesced command", "detail": "Every edit gesture (drag, resize, type, colour) produces exactly one command on release. Esc / blur / pointercancel aborts with zero state change. Everything is undoable." },
+    { "rule": "AI is untrusted input", "detail": "All AI payloads are validated with strict Zod schemas at the boundary. The model never writes to the document or spec directly — only through approved diff cards / candidates." },
+    { "rule": "Max 3 entry points per tool", "detail": "Each tool is reachable via at most three of: canvas, panel/toolbar, keyboard/palette. Do not add a fourth entry point." },
+    { "rule": "Never colour alone for status", "detail": "Every status (save state, key state, coverage, badges) combines icon + text/tooltip so it works without colour." },
+    { "rule": "Keyboard-first", "detail": "Every entry point has a keyboard equivalent; full map in keyboard_shortcuts. Focus is never trapped; Esc always backs out one level." },
+    { "rule": "Tokens-only chrome", "detail": "All chrome colours/sizes come from the design token set (see design_tokens_reference). Canvas owns the colour; accent is reserved for decisions, approval and selection." },
+    { "rule": "Flow layout only", "detail": "Elements stack in document flow. No absolute positioning, no freeform x/y, no rotation. 'Reorder' and 'padding' are the only layout tools." },
+    { "rule": "Hard bounds", "detail": "Prompt: 256 chars. Variants per generation: 1–6 (default 3). Screens per project: 50 (bounds.maxPages). Spec frames per screen: 20. Spec elements per frame: 20." },
+    { "rule": "Performance budgets", "detail": "Variant preview swap < 50ms. Respect prefers-reduced-motion: no zoom/scroll animations; variant swap is a hard cut." },
+    { "rule": "Stale-base discipline", "detail": "Candidates record the document revision they were generated from (baseRev). Applying a stale candidate is rejected (STALE_BASE) and the card offers Rebase (if properties are disjoint) or Regenerate." }
+  ],
+
+  "layout": {
+    "ascii_map": "See quil-redesign-spec.md §3 and quil-workspace-mockup.html for exact proportions.",
+    "regions": [
+      {
+        "id": "A",
+        "name": "Top bar",
+        "geometry": "Full width, 48px tall, spans all columns",
+        "contains": ["Brand mark + wordmark", "Inline-editable project name (with rename affordance)", "Save status chip", "AI key (BYOK) status chip", "Undo / Redo buttons", "Preview button (primary)", "Settings gear"],
+        "rules": "Undo/redo live here (global convention). Top bar is never selection-dependent — identical whether an element is selected or not."
+      },
+      {
+        "id": "B",
+        "name": "AI rail (left)",
+        "geometry": "Left column, 320–360px, resizable",
+        "contains": ["Rail tabs: Generate / Spec / Decisions", "Target chip", "Prompt box (pinned, always visible)", "Variants quantity stepper", "Generate button", "Generation queue card", "Variant tray cards", "Intake launcher (footer, when no spec exists)", "BYOK inline status (footer)"],
+        "rules": "AI-related content ONLY. The prompt box is the product's primary input and must never scroll out of view."
+      },
+      {
+        "id": "E",
+        "name": "Canvas column (centre)",
+        "geometry": "Flexible centre column",
+        "contains": ["Screen tabs strip (with coverage dots + '+' + overflow dropdown)", "Zoom row (− / 100% / + / Fit / Cmd+K hint)", "Scrollable canvas with one screen (artboard) at a time", "Floating bottom-centre tool strip: Select · Frame · Text · Insert · Hand", "Keyboard hint pill (top right): / insert · C colour · G prompt"],
+        "rules": "Screen tabs belong to the canvas column, not to either rail. Approved frames render normally; pending frames render as dashed placeholders with an inline ghost Generate button."
+      },
+      {
+        "id": "C",
+        "name": "Design rail (right)",
+        "geometry": "Right column, 300–340px (min 300), resizable",
+        "contains": ["Design tree (top, collapsible, default open ≈ 40% of rail height)", "Inspector (below): selection header (kind badge + name + origin), Content / Colour / Type / Space & shape groups, decisions-applied summary, Duplicate / Delete actions"],
+        "rules": "All canvas manipulation. Nothing in this rail generates content — it edits what exists. With nothing selected the inspector shows screen-level properties + spec coverage instead of element properties."
+      },
+      {
+        "id": "D",
+        "name": "Overlays",
+        "geometry": "Positioned, not docked",
+        "contains": ["Colour picker", "Insert menu", "Command palette", "Context menus (canvas + tree)", "Candidate preview overlay", "Read-only banner (multi-tab follower)", "Recovery screen", "Project creation modal"],
+        "rules": "Overlays never dock into rails. Esc closes."
+      }
+    ],
+    "responsive_behaviour": {
+      ">=1280px": "Three columns as specified.",
+      "1100–1279px": "Rails narrow to 280px; design tree collapsed to a header bar by default.",
+      "<1100px": "Rails become toggle-over drawers (tree/inspector from right, AI from left). Workspace stays desktop-first; Landing/Settings pages remain responsive to 360px."
+    }
+  },
+
+  "tools": [
+    {
+      "id": "A1",
+      "name": "Prompt box (with target chip + variants stepper)",
+      "zone": "AI rail — pinned top of Generate tab",
+      "what_it_does": "The primary AI input. Captures a natural-language design request, shows exactly what it will affect, lets the user choose how many variants to generate, and submits the request.",
+      "how_it_works": "Always visible at the top of the Generate tab. Above the textarea a target chip shows the current target — 'Screen: Dashboard', 'Frame: Hero', or 'Selection: Button' — with a dropdown to retarget. The textarea has a 256-char cap with counter. Below it sit a quantity stepper ([−] count [+], range 1–6, default 3) and a full-width Generate button. Enter submits; Shift+Enter inserts a newline. Submission goes through the request layer (idempotency keys, retries with backoff); successful candidates land in the variant tray and the queue updates.",
+      "how_it_activates": {
+        "entry_points": ["Pinned and visible whenever the Generate tab is active", "Generate button", "Generate context action on a pending frame's ghost button (pre-fills the box)"],
+        "keyboard": ["G focuses the prompt box from anywhere", "Enter submits", "Shift+Enter newline"]
+      },
+      "states": [
+        { "state": "empty", "trigger": "no text", "ui": "placeholder 'Describe the change…'" },
+        { "state": "filled", "trigger": "text entered", "ui": "char counter, Generate enabled" },
+        { "state": "generating", "trigger": "request in flight", "ui": "Generate disabled/spinner state; queue card shows the running frame" },
+        { "state": "no-key", "trigger": "no BYOK key set", "ui": "Generate disabled with inline reason + Settings link; manual design tools unaffected" },
+        { "state": "error", "trigger": "provider error", "ui": "error surfaced on the queue/candidate card with Retry; prompt box stays usable" }
+      ],
+      "commands_fired": ["AI request via request layer (no document command until a candidate is approved)"]
+    },
+    {
+      "id": "A2",
+      "name": "Variant tray (candidate cards)",
+      "zone": "AI rail — below prompt box",
+      "what_it_does": "Shows the N candidate variants for the current target as cards with live miniatures, and is where approval happens: preview, approve (with scope), reject, regenerate.",
+      "how_it_works": "Cards render under the prompt after generation. The active card previews on the canvas through the overlay layer (<50ms swap, never touches the committed document). Clicking a card previews it. Approve opens the scope row inline (A3) and on confirm fires apply_candidate, which converts the candidate into one or more decisions. Reject discards. Regenerate re-runs for that frame. Card header shows variant number; the active one carries a PREVIEW pill. Candidates record baseRev; stale ones surface Rebase/Regenerate instead of Approve.",
+      "how_it_activates": {
+        "entry_points": ["Appears automatically after generation completes", "Card click = preview", "Card action buttons"],
+        "keyboard": ["1–9 selects the active variant (when tray is open)", "A approves the active variant"]
+      },
+      "states": [
+        { "state": "generating", "trigger": "request in flight", "ui": "skeleton card" },
+        { "state": "preview/active", "trigger": "card clicked or number key", "ui": "accent ring + PREVIEW pill; canvas shows the variant" },
+        { "state": "idle", "trigger": "another card active", "ui": "standard card with Preview + Regenerate actions" },
+        { "state": "stale", "trigger": "document changed since generation (baseRev mismatch)", "ui": "Stale label; [Rebase] if disjoint properties, else [Regenerate]; Approve hidden" },
+        { "state": "applied", "trigger": "approve confirmed", "ui": "card resolves; frame status → approved; decisions appear in Decisions tab" },
+        { "state": "rejected", "trigger": "Reject clicked", "ui": "card discarded" }
+      ],
+      "commands_fired": ["apply_candidate (on approve)", "double-approve is a no-op (CandidateId dedupe)"]
+    },
+    {
+      "id": "A3",
+      "name": "Scope picker",
+      "zone": "AI rail (inside approve flow) + compact row in inspector",
+      "what_it_does": "Chooses the decision scope an approval applies at — Instance / Screen / Global — and shows in plain language what will change plus a live count of affected elements ('affects 9').",
+      "how_it_works": "Moved into the approve flow inside the variant card (scope is part of making a decision), with a compact permanent row in the inspector for re-scoping an existing decision later. Three segmented options; selecting one recomputes the affected count from the decision registry. The effect text is plain language, e.g. 'Screen · affects 9'.",
+      "how_it_activates": {
+        "entry_points": ["Inline in the variant card after clicking Approve", "Inspector scope row for the selected element"],
+        "keyboard": ["S focuses the scope row for the current selection"]
+      },
+      "states": [
+        { "state": "instance", "trigger": "user picks Instance", "ui": "change applies to this element only" },
+        { "state": "screen", "trigger": "user picks Screen", "ui": "change applies across the current screen" },
+        { "state": "global", "trigger": "user picks Global", "ui": "change applies everywhere the property is not already overridden; count usually highest" },
+        { "state": "count-updating", "trigger": "scope changed", "ui": "affected count recomputes live" }
+      ],
+      "commands_fired": ["scope is a parameter of apply_candidate / set_property"]
+    },
+    {
+      "id": "A4",
+      "name": "Spec blueprint (Spec tab)",
+      "zone": "AI rail — Spec tab",
+      "what_it_does": "Makes the per-screen generation contract readable and editable: one plain-language row per frame requirement, with live status, inline editing, and AI-proposed changes as approve/reject diff cards.",
+      "how_it_works": "Header: 'SPEC · Screen: Dashboard' + coverage total ('3/5 frames') + screen switcher. Rows are auto-summarised from the structured spec (kind + counts + key props) — never raw JSON. Row click scrolls the canvas to that frame (or its dashed placeholder if pending). [Edit spec] swaps rows to inline editors: text field per row, kind picker, reorder handles, delete, [+ Add frame] with the 7-kind picker. Every edit dispatches update_page_spec (Zod-strict, bounds: 20 frames/screen, 20 elements/frame) so spec edits are undoable and persisted. Editing the spec of an APPROVED frame flags it 'spec changed — regenerate?' — the old frame stays until the user approves a replacement; never silent mutation. When intake/generation proposes spec edits they arrive as diff cards ('+ Table frame: 10 rows, sort by MRR' / '− Footer frame'); Approve applies via update_page_spec, Reject discards.",
+      "how_it_activates": {
+        "entry_points": ["Spec tab in the AI rail", "[Edit spec] button", "[+ Add frame]", "Diff card Approve/Reject"],
+        "keyboard": ["Row navigation via Tab; Enter opens the row's frame on canvas"]
+      },
+      "states": [
+        { "state": "approved", "trigger": "frame approved", "ui": "✔ green icon + 'Approved' chip" },
+        { "state": "generating", "trigger": "frame being generated", "ui": "◌ accent icon + 'Needs approval' chip" },
+        { "state": "pending", "trigger": "not yet generated", "ui": "○ dashed icon + 'Pending' chip" },
+        { "state": "spec-changed", "trigger": "spec edited under an approved frame", "ui": "flag chip 'spec changed — regenerate?'; canvas frame gets dashed accent outline + chip" },
+        { "state": "edit-mode", "trigger": "[Edit spec]", "ui": "inline editors + reorder handles" }
+      ],
+      "commands_fired": ["update_page_spec"]
+    },
+    {
+      "id": "A5",
+      "name": "Decisions list (Decisions tab)",
+      "zone": "AI rail — Decisions tab",
+      "what_it_does": "Browsable registry of every approved decision: what property, what value, at what scope, when, and what it supersedes. Clicking one highlights everything it affects on canvas.",
+      "how_it_works": "Rows grouped by screen/kind. Each row: colour/property swatch, property name (e.g. button.bgColor), value + provenance ('Brand rose · approved 2 min ago', 'contrast AAA'), scope chip (Global/Screen/Instance). Superseded decisions remain in history (marked, ordered below the live one). Filter box narrows by property/value. Click → highlight affected elements on canvas.",
+      "how_it_activates": {
+        "entry_points": ["Decisions tab in the AI rail", "Decision badges (◆) in the design tree link to the relevant entry", "Inspector 'N decisions apply here' summary"],
+        "keyboard": ["Tab-navigable list; Enter highlights"]
+      },
+      "states": [
+        { "state": "active", "trigger": "decision currently resolves", "ui": "normal row" },
+        { "state": "superseded", "trigger": "a newer decision overrode it", "ui": "dimmed, kept in history" },
+        { "state": "orphaned", "trigger": "the screen it applied to was deleted", "ui": "marked orphaned per registry rules" },
+        { "state": "highlighting", "trigger": "row clicked", "ui": "affected canvas elements highlighted until Esc/click-away" }
+      ],
+      "commands_fired": ["read-only over the decision registry"]
+    },
+    {
+      "id": "A6",
+      "name": "Generation queue (progress card)",
+      "zone": "AI rail — Generate tab, between prompt and candidates",
+      "what_it_does": "Persistent, visible progress for layer-by-layer generation: which screen, how many frames done ('3/5'), which frame is generating, what is pending. Doubles as the control surface for the loop.",
+      "how_it_works": "Derives from the screen spec. Rows: ✔ done / ◌ generating / ○ todo, plus a progress bar. Interjection is allowed anytime: clicking a pending frame on canvas or in the tree prioritises it next; selecting an element switches the prompt target chip to it. A failed frame never blocks the queue: its card shows Retry, and the queue pauses after 2 automatic retries with jittered backoff. Manual editing is never blocked.",
+      "how_it_activates": {
+        "entry_points": ["Starts from intake step 4 [Generate screens]", "Per-frame Generate (ghost button on placeholder, queue row, or prompt box)"],
+        "keyboard": ["No dedicated key; reachable via palette"]
+      },
+      "states": [
+        { "state": "hidden/idle", "trigger": "no generation this session", "ui": "not rendered" },
+        { "state": "running", "trigger": "generation active", "ui": "rows + progress bar; current frame accent" },
+        { "state": "paused", "trigger": "provider error after 2 auto-retries", "ui": "paused state on failed frame + Retry button; other frames unaffected" },
+        { "state": "complete", "trigger": "all frames approved", "ui": "summary; coverage dot on the screen tab fills" }
+      ],
+      "commands_fired": ["drives per-frame generation; approvals flow through apply_candidate"]
+    },
+    {
+      "id": "A7",
+      "name": "Intake launcher",
+      "zone": "AI rail footer + canvas empty state",
+      "what_it_does": "Entry point into the guided intake wizard whenever the project has no spec yet.",
+      "how_it_works": "Appears as 'Run guided intake' in the AI rail footer when no spec exists, and in the blank-project canvas empty state ('Design your first screen' + [Insert (/)] + [Run guided intake]). Routes to /new?project=:id — the wizard is bound to an existing project and can never be reached without one.",
+      "how_it_activates": {
+        "entry_points": ["AI rail footer (no-spec projects)", "Canvas empty state"],
+        "keyboard": ["Tab-reachable; Enter activates"]
+      },
+      "states": [
+        { "state": "visible", "trigger": "project has no spec", "ui": "footer launcher + empty-state card" },
+        { "state": "hidden", "trigger": "spec exists", "ui": "removed from footer" },
+        { "state": "disabled", "trigger": "follower (read-only) tab", "ui": "disabled with tooltip" }
+      ],
+      "commands_fired": ["navigation only (project must already exist)"]
+    },
+    {
+      "id": "A8",
+      "name": "BYOK status chip",
+      "zone": "Top bar + AI rail footer",
+      "what_it_does": "Shows the AI key state at a glance and links to Settings. Guarantees the user always knows whether AI features are live, offline, or failing.",
+      "how_it_works": "Top bar chip and an inline status line in the AI rail footer ('BYOK active · gpt-4o-mini · Manage'). Text + icon + colour, never colour alone. Click opens Settings (flow F4).",
+      "how_it_activates": {
+        "entry_points": ["Top bar chip", "AI rail footer link"],
+        "keyboard": ["Tab-reachable; Enter opens Settings"]
+      },
+      "states": [
+        { "state": "key-set", "trigger": "valid key in session", "ui": "● Key set + model name" },
+        { "state": "no-key", "trigger": "no key entered", "ui": "○ No key (offline suggestions)" },
+        { "state": "key-rejected", "trigger": "provider rejected the key", "ui": "▲ Key rejected — link to fix" }
+      ],
+      "commands_fired": ["navigation only"]
+    },
+    {
+      "id": "M1",
+      "name": "Select",
+      "zone": "Canvas + design tree (two-way sync)",
+      "what_it_does": "Picks an element, frame or screen for inspection and editing. Selection drives the inspector, the prompt target chip, and canvas outlines.",
+      "how_it_works": "Click an element on the canvas (data-element-id) to select; hover shows a light outline; the selection gets accent outline + corner handles. Tab / Shift+Tab cycle through elements; Esc deselects. Selecting on canvas highlights and scrolls the corresponding tree row into view, and vice versa. Focus returns to the canvas container after tree selection so V→Tab flows keep working.",
+      "how_it_activates": {
+        "entry_points": ["Canvas click / hover", "Design tree row click", "Floating strip Select tool"],
+        "keyboard": ["V selects the select tool", "Tab / Shift+Tab cycle", "Esc deselects"]
+      },
+      "states": [
+        { "state": "nothing-selected", "trigger": "initial state or Esc", "ui": "inspector shows screen-level properties + spec coverage" },
+        { "state": "element-selected", "trigger": "click/Tab/tree", "ui": "outline + handles; inspector shows element groups; prompt target chip = Selection" },
+        { "state": "hover", "trigger": "pointer over element", "ui": "light hover outline" }
+      ],
+      "commands_fired": ["none (selection is view state, not document state)"]
+    },
+    {
+      "id": "M2",
+      "name": "Design tree",
+      "zone": "Design rail — top, collapsible",
+      "what_it_does": "The full Screen ▸ Frame ▸ Element hierarchy in one navigable tree: select, rename, reorder, insert into, duplicate, delete — with decision/drift/pending badges.",
+      "how_it_works": "Sits at the top of the right rail (≈40% height), collapsible to a 40px 'Design tree ▾' header. Rows: kind icon + label; labels derive from content (text prop) or kind+index; indentation guides; collapse chevrons (collapsing a screen hides its frames). Filter box narrows by substring while preserving hierarchy. Two-way selection sync with canvas. Drag rows to reorder within a parent or move across frames (same screen in MVP) with drop indicators; Alt+↑/↓ moves the row. Hover reveals row actions (⋯ → Duplicate / Delete / Insert into frame). '+' on a screen row inserts a frame (spec-aware defaults); '+' on a frame row inserts an element (kind picker). Double-click renames — this is element META (display label), not document text.",
+      "how_it_activates": {
+        "entry_points": ["Always present in right rail", "Row interactions above", "Row context menu"],
+        "keyboard": ["Arrow-key navigation within tree", "Alt+↑/↓ reorder", "Enter selects on canvas", "F2/double-click rename"]
+      },
+      "states": [
+        { "state": "expanded/collapsed", "trigger": "chevron click", "ui": "per-row collapse state" },
+        { "state": "selected", "trigger": "row click or canvas selection", "ui": "accent-soft row highlight, synced both ways" },
+        { "state": "badge:decision (◆)", "trigger": "element carries an approved decision", "ui": "◆ with tooltip naming the decision" },
+        { "state": "badge:drift (⚠)", "trigger": "element deviates from its approved decision", "ui": "⚠ amber with tooltip" },
+        { "state": "badge:pending (⌕)", "trigger": "spec frame without generated nodes", "ui": "⌕ with tooltip" },
+        { "state": "filtering", "trigger": "text in filter box", "ui": "substring match, hierarchy preserved" },
+        { "state": "dragging", "trigger": "row drag", "ui": "drop indicators between rows" }
+      ],
+      "commands_fired": ["move_element (drag/Alt+arrows)", "add_section (screen +)", "add_element (frame +)", "batch (duplicate subtree)", "remove_element (delete)", "set_element_meta (rename — or namespaced set_property, decided at build)"]
+    },
+    {
+      "id": "M3",
+      "name": "Edit text (in-place)",
+      "zone": "Canvas",
+      "what_it_does": "Inline editing of any text content: headings, labels, button text. Plain text only — no rich formatting.",
+      "how_it_works": "Double-click a text-bearing element (or Enter/T on a selection) to place a caret. Enter commits; Esc cancels with zero change. Commit produces one coalesced set_property on the text property.",
+      "how_it_activates": {
+        "entry_points": ["Double-click on canvas", "Selected element + Enter", "Selected element + T"],
+        "keyboard": ["Enter commit", "Esc cancel"]
+      },
+      "states": [
+        { "state": "idle", "trigger": "default", "ui": "static text" },
+        { "state": "editing", "trigger": "activate", "ui": "caret + inline field; click-away commits" },
+        { "state": "cancelled", "trigger": "Esc", "ui": "reverts, zero state change" }
+      ],
+      "commands_fired": ["set_property (text/label)"]
+    },
+    {
+      "id": "M4",
+      "name": "Insert menu",
+      "zone": "Canvas overlay + design tree +",
+      "what_it_does": "Adds a new element or frame with schema-valid defaults. Seven element kinds; images stay disabled until an assets story exists.",
+      "how_it_works": " '/' opens the insert menu overlay near the selection/insertion point. Canvas ghost '+' buttons and tree row '+' open the same picker (spec-aware defaults for frames). Choosing a kind inserts with sensible defaults immediately editable. Invalid contexts (image without assets) render disabled with a tooltip.",
+      "how_it_activates": {
+        "entry_points": ["'/' anywhere in the workspace", "Floating strip Insert button", "Tree row '+'", "Canvas ghost buttons"],
+        "keyboard": ["/ opens", "Esc closes", "Arrows + Enter choose"]
+      },
+      "states": [
+        { "state": "open", "trigger": "activated", "ui": "kind list with icons + descriptions" },
+        { "state": "kind-disabled", "trigger": "e.g. Image with no assets", "ui": "dimmed + tooltip reason" }
+      ],
+      "commands_fired": ["add_element", "add_section"]
+    },
+    {
+      "id": "M5",
+      "name": "Reorder",
+      "zone": "Design tree + canvas flow",
+      "what_it_does": "Changes the order of elements/frames within the flow layout — the ONLY layout rearrangement tool (no free positioning).",
+      "how_it_works": "Drag rows in the tree (drop indicators show the target gap); Alt+↑/↓ nudges the selected row. Moves can cross frames within the same screen (MVP). The canvas reflects flow order; nothing is ever absolutely positioned. Abort (Esc/pointercancel) leaves zero change.",
+      "how_it_activates": {
+        "entry_points": ["Tree drag", "Tree context menu move", "Canvas grip (where rendered)"],
+        "keyboard": ["Alt+↑/↓"]
+      },
+      "states": [
+        { "state": "dragging", "trigger": "pointer down + move", "ui": "drop indicators; source row ghosted" },
+        { "state": "committed", "trigger": "drop", "ui": "one move_element command (undoable)" },
+        { "state": "aborted", "trigger": "Esc / pointercancel", "ui": "no change" }
+      ],
+      "commands_fired": ["move_element"]
+    },
+    {
+      "id": "M6",
+      "name": "Resize",
+      "zone": "Canvas handles",
+      "what_it_does": "Adjusts kind-dependent REAL properties via handles — image width/height, card padding/radius, button radius, text size — never a transform.",
+      "how_it_works": "Selection renders a per-kind handle table (corner handles for radius, edge handles for padding, 8 handles for image w/h). Dragging previews live via requestAnimationFrame; on release exactly one coalesced set_property is committed. Arrow keys nudge 1px; Shift+Arrows 10px. Esc aborts with zero change.",
+      "how_it_activates": {
+        "entry_points": ["Selection handles on canvas"],
+        "keyboard": ["Arrows nudge 1px", "Shift+Arrows nudge 10px", "Esc abort"]
+      },
+      "states": [
+        { "state": "idle", "trigger": "selection exists", "ui": "handles visible" },
+        { "state": "dragging", "trigger": "handle drag", "ui": "rAF live preview of the real property" },
+        { "state": "committed", "trigger": "release", "ui": "one command; undoable" },
+        { "state": "aborted", "trigger": "Esc", "ui": "no change" }
+      ],
+      "commands_fired": ["set_property (coalesced)"]
+    },
+    {
+      "id": "M7",
+      "name": "Type properties",
+      "zone": "Design rail — inspector Type group",
+      "what_it_does": "Font size, weight, line-height, alignment and family (from a fixed allowlist) for text-bearing elements.",
+      "how_it_works": "Inspector group appears for kinds that support type. Numeric fields validate inline — invalid values show a message and change nothing. Weight is a segmented control (400/600/700/800). Cmd/Ctrl+B toggles bold.",
+      "how_it_activates": {
+        "entry_points": ["Inspector Type group on supported selection"],
+        "keyboard": ["Cmd/Ctrl+B bold toggle"]
+      },
+      "states": [
+        { "state": "values", "trigger": "selection", "ui": "fields reflect resolved values (decision-resolved)" },
+        { "state": "invalid", "trigger": "out-of-range input", "ui": "inline message; no change applied" }
+      ],
+      "commands_fired": ["set_property (fontSize/fontWeight/lineHeight/align)"]
+    },
+    {
+      "id": "M8",
+      "name": "Colour picker",
+      "zone": "Design rail — inspector Colour group + overlay picker",
+      "what_it_does": "Sets background/text colours. Approved colours are offered FIRST (consistency by default), and a live WCAG contrast badge updates as you choose.",
+      "how_it_works": "Inspector swatch row shows: the approved decision swatch (✓ mark), alternative swatches, and a custom '+' slot. Clicking a swatch or the custom slot opens the colour picker overlay. Contrast badge beside the row shows the live ratio of the chosen colour against its background (e.g. 'AAA 16.7:1'). Picking a colour that matches an approved decision reuses that decision rather than duplicating it.",
+      "how_it_activates": {
+        "entry_points": ["Inspector Colour group", "Picker overlay", "Floating strip / keyboard hint"],
+        "keyboard": ["C opens the colour group/picker for the selection"]
+      },
+      "states": [
+        { "state": "swatch:approved", "trigger": "value equals an approved decision", "ui": "✓ check on the swatch" },
+        { "state": "swatch:custom", "trigger": "custom value", "ui": "'+' slot opens picker" },
+        { "state": "contrast-badge", "trigger": "any colour choice", "ui": "AA/AAA ratio, pass styling, always text+value" }
+      ],
+      "commands_fired": ["set_property (bgColor/color/textColor)"]
+    },
+    {
+      "id": "M9",
+      "name": "Space & shape",
+      "zone": "Design rail — inspector group",
+      "what_it_does": "Padding, corner radius and shadow (three fixed levels, no free-form effect stacks).",
+      "how_it_works": "Inspector group per supported kind. '[' and ']' cycle shadow level down/up. Some kinds expose the same values via canvas handles (see M6). Invalid values are rejected inline, changing nothing.",
+      "how_it_activates": {
+        "entry_points": ["Inspector Space & shape group", "Canvas corner/edge handles"],
+        "keyboard": ["[ shadow down", "] shadow up"]
+      },
+      "states": [
+        { "state": "values", "trigger": "selection", "ui": "fields/segmented shadow control" },
+        { "state": "invalid", "trigger": "bad input", "ui": "inline message; no change" }
+      ],
+      "commands_fired": ["set_property (padding/radius/shadow)"]
+    },
+    {
+      "id": "M10",
+      "name": "Duplicate / Delete",
+      "zone": "Inspector footer + context menus",
+      "what_it_does": "Copies an element/subtree in place, or removes it — always undoable.",
+      "how_it_works": "Duplicate performs a single batch command (subtree in one step). Delete removes the element; deleting a SCREEN asks for confirmation and orphans its decisions (registry rule: marked, not destroyed). Project deletion (Projects page) is type-to-confirm.",
+      "how_it_activates": {
+        "entry_points": ["Inspector footer buttons", "Canvas context menu", "Tree row actions"],
+        "keyboard": ["Cmd/Ctrl+D duplicate", "Backspace delete"]
+      },
+      "states": [
+        { "state": "confirm", "trigger": "destructive on screens/projects", "ui": "confirm dialog (type-to-confirm for project delete)" },
+        { "state": "applied", "trigger": "action taken", "ui": "one undoable command" }
+      ],
+      "commands_fired": ["batch (duplicate)", "remove_element"]
+    },
+    {
+      "id": "M11",
+      "name": "Zoom / Pan / Hand / Fit",
+      "zone": "Canvas zoom row + gestures",
+      "what_it_does": "View-only navigation: zoom, pan, hand tool, fit-to-screen. Never mutates the document.",
+      "how_it_works": "Zoom row (− / percentage / +) plus a Fit button that scales the artboard to the viewport. Per-screen zoom & scroll are remembered for the session and restored on tab switch (session state, not document state). Hand tool and Space-drag pan the canvas.",
+      "how_it_activates": {
+        "entry_points": ["Zoom row buttons", "Fit button"],
+        "keyboard": ["Cmd/Ctrl+= in", "Cmd/Ctrl+− out", "Cmd/Ctrl+0 reset 100%", "H hand tool", "Space-drag pan"]
+      },
+      "states": [
+        { "state": "zoom-level", "trigger": "controls/keys", "ui": "percentage readout" },
+        { "state": "fit-active", "trigger": "Fit", "ui": "artboard scaled to viewport" },
+        { "state": "hand-active", "trigger": "H", "ui": "grab cursor; clicks don't select" }
+      ],
+      "commands_fired": ["none (view state only)"]
+    },
+    {
+      "id": "M12",
+      "name": "Undo / Redo",
+      "zone": "Top bar + keyboard",
+      "what_it_does": "Reverts/reapplies history one gesture at a time — including approvals and spec edits (undoing an approval removes its decisions and updates scope counts).",
+      "how_it_works": "Built on Immer inverse patches; every command is one undo step. Top bar buttons mirror the keyboard.",
+      "how_it_activates": {
+        "entry_points": ["Top bar buttons"],
+        "keyboard": ["Cmd/Ctrl+Z undo", "Cmd/Ctrl+Shift+Z (Shift+Z) redo"]
+      },
+      "states": [
+        { "state": "can-undo/can-redo", "trigger": "history position", "ui": "buttons disabled at history ends" }
+      ],
+      "commands_fired": ["undo", "redo"]
+    },
+    {
+      "id": "M13",
+      "name": "Screen manager (multi-screen)",
+      "zone": "Canvas column — screen tabs strip",
+      "what_it_does": "Creates, switches, renames, duplicates, reorders and deletes screens; shows per-screen generation coverage.",
+      "how_it_works": "Tabs across the top of the canvas column, each with a coverage dot (filled = all frames approved; half = in progress; empty = untouched). '+' adds a screen. Beyond 6 tabs an overflow '»' dropdown lists screens with dots + search. Right-click context menu per tab: Rename · Duplicate (frames + elements in one batch) · Reorder left/right · Delete (confirm; decisions on that screen become orphaned). Reordering (tab drag or context menu) dispatches the reorder_pages command. Exactly ONE screen is visible at a time — a gallery view is explicitly out of scope. Cmd/Ctrl+P opens the quick screen switcher (palette in screen mode).",
+      "how_it_activates": {
+        "entry_points": ["Tab click", "'+' add", "Tab context menu", "Overflow dropdown"],
+        "keyboard": ["Cmd/Ctrl+P quick switcher (type to fuzzy-find a screen)"]
+      },
+      "states": [
+        { "state": "active", "trigger": "tab click", "ui": "accent fill + underline" },
+        { "state": "coverage:full|half|empty", "trigger": "frame approval state", "ui": "dot filled / half-filled / empty" },
+        { "state": "overflow", "trigger": ">6 screens", "ui": "» dropdown with list + search" },
+        { "state": "confirm-delete", "trigger": "Delete in context menu", "ui": "confirmation; decisions orphaned per registry" }
+      ],
+      "commands_fired": ["reorder_pages", "batch (duplicate screen)", "rename via meta", "remove (with confirm)"]
+    },
+    {
+      "id": "M14",
+      "name": "Command palette",
+      "zone": "Overlay",
+      "what_it_does": "Search-anything: every action, screen, frame and setting is one keystroke away. Also serves as the quick screen switcher.",
+      "how_it_works": "Cmd/Ctrl+K opens an input with subsequence (fuzzy) matching over the command registry, including 'go to screen/frame' entries. Cmd/Ctrl+P opens the same palette pre-seeded in screen mode. Enter executes; Esc closes.",
+      "how_it_activates": {
+        "entry_points": ["Top-bar hint chip"],
+        "keyboard": ["Cmd/Ctrl+K open", "Cmd/Ctrl+P screen-switcher mode"]
+      },
+      "states": [
+        { "state": "open", "trigger": "hotkey", "ui": "centered overlay + result list" },
+        { "state": "no-results", "trigger": "no match", "ui": "empty state with hint" }
+      ],
+      "commands_fired": ["executes registry actions"]
+    },
+    {
+      "id": "M15",
+      "name": "Zen mode",
+      "zone": "Workspace toggle",
+      "what_it_does": "Collapses both rails for a full-bleed canvas review of generated screens.",
+      "how_it_works": "Toggled with Cmd/Ctrl+Shift+\\. Both rails hide; the canvas owns the window. Any rail action, the same hotkey, or Esc restores the layout.",
+      "how_it_activates": {
+        "entry_points": [],
+        "keyboard": ["Cmd/Ctrl+Shift+\\ toggle", "Esc exit"]
+      },
+      "states": [
+        { "state": "on", "trigger": "hotkey", "ui": "rails hidden" },
+        { "state": "off", "trigger": "hotkey/Esc", "ui": "three-column layout restored" }
+      ],
+      "commands_fired": ["none (layout state)"]
+    },
+    {
+      "id": "T1",
+      "name": "Project name (inline edit)",
+      "zone": "Top bar",
+      "what_it_does": "Displays and renames the current project without leaving the workspace.",
+      "how_it_works": "Name shown with a small ✎ affordance; click to edit inline; commit = one command; Esc cancels.",
+      "how_it_activates": {
+        "entry_points": ["Top bar click"],
+        "keyboard": ["Enter commit", "Esc cancel"]
+      },
+      "states": [
+        { "state": "idle", "trigger": "default", "ui": "name + ✎" },
+        { "state": "editing", "trigger": "click", "ui": "inline input" }
+      ],
+      "commands_fired": ["rename project (meta)"]
+    },
+    {
+      "id": "T2",
+      "name": "Save status indicator",
+      "zone": "Top bar",
+      "what_it_does": "Communicates persistence health (write-behind to IndexedDB/Dexie).",
+      "how_it_works": "Derived chip: 'Saved' after flush, 'Saving…' during write-behind, 'Error' on failure — at which point the recovery screen is offered, the queue pauses writes, and the canvas keeps working in memory. Icon + text, never colour alone.",
+      "how_it_activates": {
+        "entry_points": ["Automatic"],
+        "keyboard": []
+      },
+      "states": [
+        { "state": "saved", "trigger": "flush complete", "ui": "● Saved" },
+        { "state": "saving", "trigger": "write pending", "ui": "spinner/text" },
+        { "state": "error", "trigger": "persistence failure", "ui": "error chip + recovery entry" }
+      ],
+      "commands_fired": ["none (derived)"]
+    },
+    {
+      "id": "T3",
+      "name": "Preview",
+      "zone": "Top bar (primary button)",
+      "what_it_does": "Opens the view-only preview of the designed screens — how the product actually renders, with real flow layout.",
+      "how_it_works": "Launches the preview overlay from the current screen; navigation between screens allowed; no editing. Esc or close returns to the workspace.",
+      "how_it_activates": {
+        "entry_points": ["Top bar Preview button"],
+        "keyboard": ["Esc closes"]
+      },
+      "states": [
+        { "state": "open", "trigger": "click", "ui": "full overlay; rails hidden" },
+        { "state": "closed", "trigger": "Esc/close", "ui": "workspace restored" }
+      ],
+      "commands_fired": ["none (view only)"]
+    },
+    {
+      "id": "T4",
+      "name": "Settings",
+      "zone": "Top bar gear → /settings route",
+      "what_it_does": "Houses BYOK provider config (flow F4), storage options, and account (auth) entries.",
+      "how_it_works": "Routes to /settings. See flow F4 for the BYOK panel spec.",
+      "how_it_activates": {
+        "entry_points": ["Top bar gear", "BYOK chip", "Disabled-AI inline links in prompt/intake"],
+        "keyboard": ["Tab-reachable"]
+      },
+      "states": [
+        { "state": "route", "trigger": "click", "ui": "/settings page" }
+      ],
+      "commands_fired": ["navigation"]
+    }
+  ],
+
+  "overlays": [
+    { "name": "Colour picker overlay", "opens_via": "swatch click / C", "states": ["open", "closed"], "notes": "Approved colours listed first; live contrast badge inside." },
+    { "name": "Insert menu overlay", "opens_via": "/ , floating strip, ghost buttons, tree +", "states": ["open", "kind-disabled", "closed"], "notes": "7 kinds; schema-valid defaults." },
+    { "name": "Command palette", "opens_via": "Cmd/Ctrl+K, Cmd/Ctrl+P (screen mode)", "states": ["open", "no-results"], "notes": "Subsequence matching over command registry." },
+    { "name": "Context menus (canvas + tree)", "opens_via": "right-click", "states": ["open", "closed"], "notes": "Duplicate / Delete / Insert into frame; screen tabs have their own menu." },
+    { "name": "Candidate preview overlay", "opens_via": "variant card click / number keys", "states": ["previewing", "closed"], "notes": "Swap < 50ms; never mutates the document." },
+    { "name": "Read-only banner (multi-tab follower)", "opens_via": "automatic when a second tab holds the write lock", "states": ["visible"], "notes": "Rails render but every mutation entry point is disabled with tooltips." },
+    { "name": "Recovery screen", "opens_via": "persistence failure", "states": ["visible"], "notes": "Offers snapshot recovery; canvas keeps working in memory meanwhile." },
+    { "name": "Project creation modal", "opens_via": "Projects page → New project (flow F1)", "states": ["open", "submitting", "closed"], "notes": "Esc/✕ cancels with nothing persisted." }
+  ],
+
+  "flows": [
+    {
+      "id": "F1",
+      "name": "Project creation (always BEFORE intake)",
+      "hard_rule": "A project record exists before the wizard can open. The wizard is bound to a projectId and never standalone. Route /new requires ?project= — guard it.",
+      "steps": [
+        { "step": 1, "name": "Projects page", "ui": "Grid of project cards: name (inline rename), screens count, spec-coverage % ring, last edited. Card menu: Rename · Duplicate (snapshot copy) · Export JSON · Delete (type-to-confirm, wipes local keys). Sorted recent-first; no folders in MVP.", "activation": "[New project] button" },
+        { "step": 2, "name": "New-project modal", "ui": "Title 'New project' + ✕. Field 'Project name' (autofocused, prefilled 'Untitled project', text selected on focus). Section 'Start with' — two selectable CARDS (not a dropdown): 'Blank canvas — empty screen, build with /' and 'Guided intake — AI asks, you approve steps'. Footer [Cancel] [Create project].", "activation": "Enter submits; Esc/✕ cancels with nothing persisted" },
+        { "step": 3, "name": "Create", "ui": "No spinner purgatory: optimistic navigation while the snapshot writes (sub-ms locally).", "activation": "[Create project]" },
+        { "step": 4, "name": "Route", "ui": "Blank choice → /p/:id with empty-state nudges. Guided choice → /new?project=:id (intake wizard).", "activation": "automatic" }
+      ],
+      "states": ["modal-open", "name-empty (uses prefill)", "starting-point: blank|guided", "created", "cancelled"]
+    },
+    {
+      "id": "F2",
+      "name": "Intake wizard (grouped 4-step, Enter-to-submit everywhere)",
+      "hard_rule": "Full-screen route /new?project=:id bound to the existing project. Esc = save & exit to workspace (progress persists per project and reopens at the last completed step). Back/Next always available. Skippable steps are labelled 'Optional' and record defaults. Focus moves to the first field of each step (WCAG 2.2 AA).",
+      "enter_semantics": [
+        { "context": "Brief textarea", "enter": "submit step", "shift_enter": "newline", "esc": "exit wizard (save)" },
+        { "context": "Single-line inputs (screen name, style fields)", "enter": "next field / step", "shift_enter": "literal newline", "esc": "exit wizard (save)" },
+        { "context": "Any step", "enter": "'Continue ⏎' is the focus-visible default button", "shift_enter": "—", "esc": "exit wizard (save)" }
+      ],
+      "steps": [
+        { "step": 1, "name": "Brief", "ui": "Autofocused textarea ('What are you designing?') with counter (e.g. 182/5000). Hint line under the field: 'Enter to continue · Shift+Enter for newline'. Example chips ([SaaS dashboard] [Fitness app] [Crypto wallet] [Admin console]) FILL the field, never auto-submit. No AI key → inline chip 'Working offline — suggestions will be generic' + Settings link; mock provider keeps the flow functional.", "activation": "Enter / [Continue ⏎]" },
+        { "step": 2, "name": "Screens", "ui": "AI proposes a screen list from the brief (strict Zod schemas). Editable card list: name · type chip (Dashboard / Detail / List / Auth / Settings / Custom) · one-line 'will include' summary (AI-drafted, editable inline) · drag or Alt+↑/↓ reorder · remove · [+ Add screen]. Minimum one screen; maximum bounds.maxPages (50).", "activation": "Enter / [Continue ⏎]" },
+        { "step": 3, "name": "Style direction (Optional)", "ui": "Three direction cards (swatch strip + font pair + radius/density preview), single-select — this is a DECISION, not a mood board. Under the selected card: accent colour override (picker with live contrast badge vs bg), font pair from the allowlist, density (comfortable / compact). 'Use Quil defaults' skip link. On approval each choice becomes a GLOBAL decision through the normal command bus.", "activation": "Enter / [Continue ⏎]" },
+        { "step": 4, "name": "Review & generate", "ui": "Summary: brief excerpt, screen list with frame counts, style card thumbnail, BYOK status. Primary [Generate screens] closes the wizard → workspace with the generation queue running and the AI rail on the Generate tab. Secondary [Save and exit] stores the spec and defers generation.", "activation": "[Generate screens] / [Save and exit]" }
+      ],
+      "states": ["step-1..4", "skipped-optional", "saved-exit (resume at last step)", "offline (mock suggestions, clearly labelled)"]
+    },
+    {
+      "id": "F3",
+      "name": "Layer-by-layer generation (the core loop)",
+      "hard_rule": "One layer at a time, each approved before the next — this is what makes Quil design software rather than a slot machine. Generation is driven by the spec; coverage is the progress metric.",
+      "layer_model": "Screen ▸ Frame ▸ Element. Pass 1 — skeleton: generate/review the frame list per screen (names, order, kinds), approved as one batch. Pass 2 — frame content: N variants per frame, preview on canvas, approve with scope → decisions. Frame status: pending → generating → needs approval → approved. Pass 3 — refinement: select any element, prompt retargets to 'Selection: X', N variants for that element only, same approval loop.",
+      "canvas_behaviour": "Pending frames render as dashed placeholders with the frame name + inline ghost [✦ Generate] button (AI-on-canvas). Approving fills the placeholder in place. Approved-but-spec-changed frames get a dashed accent outline + 'spec changed' chip opening the diff card.",
+      "loop_mechanics": [
+        "Interject anytime: click a pending frame (canvas or tree) to prioritise it next; select an element to retarget the prompt.",
+        "Stale-base discipline: candidates carry baseRev; stale apply → STALE_BASE rejection; card offers [Rebase] (disjoint properties) or [Regenerate].",
+        "Failure isolation: one frame failing never blocks the queue — card Retry; queue pauses after 2 auto-retries (jittered backoff); manual editing never blocked.",
+        "Idempotency: CandidateId dedupe — double-approve is a no-op.",
+        "Coverage: screen-tab dot (filled/half/empty); Spec tab shows '3/5 frames · 12/28 elements resolved from decisions'. All derived from state, never stored twice."
+      ],
+      "states": ["pass-1-skeleton", "pass-2-frame-content", "pass-3-refinement", "frame: pending|generating|needs-approval|approved|spec-changed", "queue: idle|running|paused|complete"]
+    },
+    {
+      "id": "F4",
+      "name": "BYOK settings (bring your own key)",
+      "hard_rule": "Session-only storage is the DEFAULT and the recommendation. The key lives in memory for the tab session (destroyed on unload/logout), never in IndexedDB, never in logs/analytics/URLs (logger redaction).",
+      "steps": [
+        { "step": 1, "name": "Provider cards", "ui": "Single-select cards: OpenAI / Anthropic / OpenRouter / …", "activation": "click" },
+        { "step": 2, "name": "API key", "ui": "Password field with 👁 reveal toggle.", "activation": "type / paste" },
+        { "step": 3, "name": "Test key", "ui": "[Test key] runs one minimal, abortable call (timeout + AbortController). Result shows provider + model ('✓ Valid · gpt-4o-mini reachable'), NEVER the key.", "activation": "[Test key]" },
+        { "step": 4, "name": "Model", "ui": "Dropdown sourced from src/config/models.json per provider; wrong-model errors surface as recoverable ProviderError.", "activation": "select" },
+        { "step": 5, "name": "Storage", "ui": "Radio: ◉ This session only (recommended) / ○ Remember on this device — the latter is phase-2 and renders DISABLED with a tooltip until an encrypt-at-rest design ships.", "activation": "select" },
+        { "step": 6, "name": "Save / Clear", "ui": "[Save] persists the choice; [Clear key] wipes it. Footnote: 'Keys are redacted in logs and never sent anywhere except the provider you chose.'", "activation": "buttons" }
+      ],
+      "states": ["key-set", "no-key (offline suggestions)", "key-rejected", "testing", "valid", "invalid", "remember-on-device-disabled (tooltip)"]
+    }
+  ],
+
+  "keyboard_shortcuts": [
+    { "keys": "V", "action": "Focus canvas / select tool" },
+    { "keys": "Tab / Shift+Tab", "action": "Cycle elements" },
+    { "keys": "Enter / T", "action": "Edit selected text" },
+    { "keys": "C", "action": "Colour group / picker for selection" },
+    { "keys": "S", "action": "Scope row for selection (re-scope)" },
+    { "keys": "G", "action": "Focus prompt box" },
+    { "keys": "1–9", "action": "Pick active variant (when tray open)" },
+    { "keys": "A", "action": "Approve active variant" },
+    { "keys": "/", "action": "Insert menu" },
+    { "keys": "Alt+↑ / Alt+↓", "action": "Reorder in tree / flow" },
+    { "keys": "[ / ]", "action": "Shadow level down / up" },
+    { "keys": "Arrows / Shift+Arrows", "action": "Nudge 1px / 10px" },
+    { "keys": "Cmd/Ctrl+D", "action": "Duplicate" },
+    { "keys": "Backspace", "action": "Delete selection" },
+    { "keys": "Cmd/Ctrl+Z / Shift+Z", "action": "Undo / redo" },
+    { "keys": "Cmd/Ctrl+K", "action": "Command palette" },
+    { "keys": "Cmd/Ctrl+P", "action": "Quick screen switcher (palette screen mode)" },
+    { "keys": "Cmd/Ctrl+= / − / 0", "action": "Zoom in / out / 100%" },
+    { "keys": "H · Space-drag", "action": "Hand tool · pan" },
+    { "keys": "Cmd/Ctrl+Shift+\\", "action": "Zen mode" },
+    { "keys": "Esc", "action": "Deselect · abort gesture · close overlay" },
+    { "keys": "Enter (wizard)", "action": "Submit current intake step" }
+  ],
+
+  "element_kind_controls": {
+    "note": "Only schema-supported properties per kind. Selection toolbar shows the top 3 for the kind; the inspector shows the full group. Insert menu offers 7 kinds; frames (sections) take padding/colour.",
+    "kinds": [
+      { "kind": "Heading", "content": "text, level", "colour": "color", "type": "size, weight, align", "space_shape": "—", "resize_handles": "baseline size" },
+      { "kind": "Text", "content": "text", "colour": "color", "type": "size, line-height, align", "space_shape": "—", "resize_handles": "baseline size" },
+      { "kind": "Button", "content": "label", "colour": "bgColor, textColor", "type": "weight", "space_shape": "radius", "resize_handles": "corner radius" },
+      { "kind": "Card", "content": "—", "colour": "bgColor", "type": "—", "space_shape": "radius, padding, shadow", "resize_handles": "corner / edges" },
+      { "kind": "Section (Frame)", "content": "—", "colour": "bgColor", "type": "—", "space_shape": "padding", "resize_handles": "edges (padding)" },
+      { "kind": "Image", "content": "alt", "colour": "—", "type": "—", "space_shape": "fit (cover/contain/fill)", "resize_handles": "8 handles w/h" },
+      { "kind": "Navigation", "content": "items", "colour": "bgColor", "type": "—", "space_shape": "—", "resize_handles": "—" },
+      { "kind": "Form", "content": "submitLabel + fields", "colour": "bgColor", "type": "—", "space_shape": "—", "resize_handles": "—" }
+    ]
+  },
+
+  "status_glossary": {
+    "frame_status": ["pending", "generating", "needs-approval", "approved", "spec-changed"],
+    "coverage_dot": { "filled": "all frames approved", "half": "generation in progress", "empty": "untouched" },
+    "byok_chip": ["key-set (●)", "no-key (○ offline suggestions)", "key-rejected (▲)"],
+    "save_status": ["saved", "saving", "error (+ recovery screen)"],
+    "candidate_staleness": ["fresh", "stale (Rebase if disjoint / Regenerate otherwise)"],
+    "tree_badges": { "◆": "element carries an approved decision (tooltip: which)", "⚠": "drift detected on an element inside", "⌕": "pending frame (spec row without nodes)" },
+    "queue_item": ["done ✔", "running ◌", "todo ○"],
+    "scope_values": ["Instance", "Screen", "Global"],
+    "screen_tab": ["active (accent fill)", "coverage dot state", "overflow (>6 screens)"]
+  },
+
+  "edge_cases": [
+    { "situation": "Blank project, no intake run", "behaviour": "Canvas empty state: 'Design your first screen' + [Insert (/)] + [Run guided intake]; AI rail footer shows the intake launcher." },
+    { "situation": "No AI key", "behaviour": "Prompt box still works for manual design; Generate disabled with reason + Settings link; intake runs on the mock provider with clearly-labelled generic suggestions." },
+    { "situation": "Provider error mid-queue", "behaviour": "Failed frame card shows Retry; queue pauses after 2 auto-retries; manual editing is never blocked." },
+    { "situation": "Stale candidate", "behaviour": "Card marked Stale + [Rebase] if properties are disjoint, otherwise [Regenerate]." },
+    { "situation": "Second tab open (follower)", "behaviour": "Read-only banner; rails render but all mutation entry points are disabled with tooltips." },
+    { "situation": "Persistence failure", "behaviour": "Save status → error + recovery screen; queue pauses writes; canvas keeps working in memory." },
+    { "situation": "Undo of an approval", "behaviour": "Removes the decision(s) via inverse patches; scope rows and affected-counts update accordingly." },
+    { "situation": "Spec edit under an approved frame", "behaviour": "Flagged 'spec changed — regenerate?' + diff flow; the frame is never silently mutated." },
+    { "situation": "More than 6 screens", "behaviour": "Tab overflow dropdown (with search); the design tree always shows all screens." },
+    { "situation": "Reduced motion preference", "behaviour": "No zoom/scroll animations; variant swap is a hard cut." }
+  ],
+
+  "out_of_scope": {
+    "note": "Deliberate exclusions — the designer must NOT add these to the workspace (they break the product thesis or are scheduled post-MVP):",
+    "exclusions": [
+      "Pen / vectors / masks (structured elements instead)",
+      "Freeform x/y position and rotation (flow layout + reorder + padding only)",
+      "Hand-authored constraints / responsive rules (auto flow; preview is view-only)",
+      "Gradients / blend modes / effect stacks (flat fills; 3 shadow levels)",
+      "Prototyping / interactions (not the design-decision workflow)",
+      "Component authoring (decision sharing is communicated by the decisions list + tree badges)",
+      "Variables / token editor (approved decisions ARE the tokens)",
+      "Custom fonts, image editing / crop (font allowlist; image fit modes)",
+      "Comments / multiplayer / plugins / code export (revisit later)",
+      "Gallery view of all screens at once (one screen at a time + tabs covers it)"
+    ]
+  },
+
+  "design_tokens_reference": {
+    "note": "Chrome is built exclusively from these tokens (matching quil-workspace-mockup.html, porcelain-on-espresso theme). Accent is reserved for decisions/approval/selection — never decoration.",
+    "colours": {
+      "--quil-bg": "#15100d",
+      "--quil-surface": "#211b16",
+      "--quil-surface-hover": "#2d251f",
+      "--quil-raised": "#261f19",
+      "--quil-line": "#3a3029",
+      "--quil-text-100": "#f5f0f0",
+      "--quil-text-90": "#d8d0cf",
+      "--quil-text-80": "#ada3a1",
+      "--quil-text-70": "#807572",
+      "--quil-accent": "#f5f0f0",
+      "--quil-accent-hover": "#ffffff",
+      "--quil-accent-text": "#15100d",
+      "--quil-accent-soft": "rgba(245,240,240,.14)",
+      "--quil-button": "#f5f0f0",
+      "--quil-button-text": "#15100d",
+      "--warn": "#f2b63c",
+      "--ok": "#3ecf8e"
+    },
+    "type": { "ui_font": "Inter, -apple-system, 'Segoe UI', system-ui, sans-serif", "display_font": "Archivo, Inter, sans-serif", "sizes": { "xs": "0.75rem", "sm": "0.8125rem", "base": "0.875rem" } },
+    "space": ["4px", "8px", "12px", "16px", "20px", "24px"],
+    "radius": { "sm": "6px", "md": "10px", "lg": "12px" },
+    "targets": { "min_touch_target": "44px", "icon_button": "40px" }
+  }
+}

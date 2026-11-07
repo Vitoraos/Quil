@@ -2,12 +2,13 @@
 // network, or AI-provider imports. Runs in Node tests.
 
 import { z } from 'zod'
-import type { PageId } from './ids'
 import { shortTextValue } from './values'
+import type { FactTopic, IntakeScope, ProjectState } from './state'
+import type { PageId } from './ids'
 
 export type SlotKey = string
 export type SlotBasis = 'stated' | 'inferred'
-export type SlotType = 'text' | 'enum' | 'multi-enum' | 'list'
+export type SlotType = 'text' | 'enum' | 'multi-enum' | 'list' | 'page-list'
 
 export interface SlotOption {
   value: string
@@ -29,6 +30,26 @@ export interface SlotValue {
   superseded: SlotValue[] // up to 3 previously stated values, never silently overwritten
 }
 
+export interface AskedQuestion {
+  mode: 'model' | 'fallback' // fallback = app-written, provider unavailable
+  kind: 'ask'
+  target:
+    | { type: 'slot'; slots: string[] }            // 1..2 slot keys valid in the scope
+    | { type: 'topic'; topic: FactTopic }
+  question: string                                 // <= 25 words, <= 280 chars
+  options: string[]                                // 0..5, each <= 60 chars
+  why: string                                      // <= 140 chars
+}
+
+export interface TurnRecord {
+  turnId: string
+  askedSlots: string[]
+  userText: string // capped at 2000 chars by the command schema
+  acceptedUpdates: Array<{ slot: string; value: unknown; basis: SlotBasis; confidence: number; evidence: string }>
+  scope: 'project' | PageId
+  asked?: AskedQuestion
+}
+
 export interface SlotDef {
   key: string
   label: string
@@ -44,7 +65,7 @@ export interface SlotDef {
 // A short piece of user-facing text, validated at context boundaries.
 export const shortTextValue280 = shortTextValue
 
-const pageChoiceSchema = z.object({
+const _pageChoiceSchema = z.object({
   name: shortTextValue,
   purpose: shortTextValue
 }).strict()
@@ -63,7 +84,9 @@ export const slotDefs: Record<string, SlotDef> = {
       { value: 'saas', label: 'SaaS' },
       { value: 'blog', label: 'Blog' },
       { value: 'docs', label: 'Docs' },
-      { value: 'other', label: 'Other' }
+      { value: 'other', label: 'Other' },
+      { value: 'web-app', label: 'Web app' },
+      { value: 'dashboard', label: 'Dashboard' }
     ],
     required: true,
     weight: 10,
@@ -110,7 +133,7 @@ export const slotDefs: Record<string, SlotDef> = {
     key: 'pages',
     label: 'Pages',
     description: 'Pages the site needs and what each is for',
-    type: 'list',
+    type: 'page-list',
     required: true,
     weight: 8,
     maxItems: 12,
@@ -244,10 +267,103 @@ export const slotDefs: Record<string, SlotDef> = {
   }
 } as const
 
+// Page-level slot definitions (Section 7.2). purpose, visitorIntent and
+// primaryAction are required; everything else is optional.
+export const pageSlotDefs: Record<string, SlotDef> = {
+  purpose: {
+    key: 'purpose',
+    label: 'Purpose',
+    description: 'What this page is for, in one sentence',
+    type: 'text',
+    required: true,
+    weight: 10,
+    maxItems: undefined,
+    fallbackQuestion: 'What is this page for, in one sentence?'
+  },
+  visitorIntent: {
+    key: 'visitorIntent',
+    label: 'Visitor intent',
+    description: 'Who arrives here, from where, and what they want',
+    type: 'text',
+    required: true,
+    weight: 8,
+    maxItems: undefined,
+    fallbackQuestion: 'Who is this page for, and what do they want to do?'
+  },
+  primaryAction: {
+    key: 'primaryAction',
+    label: 'Primary action',
+    description: 'The one action this page should drive',
+    type: 'enum',
+    options: [
+      { value: 'purchase', label: 'Buy something' },
+      { value: 'book', label: 'Book an appointment' },
+      { value: 'sign-up', label: 'Sign up' },
+      { value: 'contact', label: 'Contact you' },
+      { value: 'inform', label: 'Inform' },
+      { value: 'other', label: 'Other' }
+    ],
+    required: true,
+    weight: 8,
+    fallbackQuestion: 'What is the one thing a visitor should do on this page?'
+  },
+  mustInclude: {
+    key: 'mustInclude',
+    label: 'Must include',
+    description: 'Content or features this page must contain',
+    type: 'list',
+    required: false,
+    weight: 6,
+    maxItems: 8,
+    fallbackQuestion: 'What must this page contain?'
+  },
+  objections: {
+    key: 'objections',
+    label: 'Objections',
+    description: 'Doubts a visitor has that the page must answer',
+    type: 'list',
+    required: false,
+    weight: 4,
+    maxItems: 5,
+    fallbackQuestion: 'What doubts might a visitor have that this page should answer?'
+  },
+  contentReadiness: {
+    key: 'contentReadiness',
+    label: 'Content readiness',
+    description: 'Whether copy and images exist',
+    type: 'enum',
+    options: [
+      { value: 'ready', label: 'Ready' },
+      { value: 'partial', label: 'Partial' },
+      { value: 'none', label: 'None' }
+    ],
+    required: false,
+    weight: 3,
+    fallbackQuestion: 'Do you have the copy and images ready for this page?'
+  },
+  avoid: {
+    key: 'avoid',
+    label: 'Avoid',
+    description: 'Things not to put on this page',
+    type: 'list',
+    required: false,
+    weight: 3,
+    maxItems: 5,
+    fallbackQuestion: 'Is there anything you do not want on this page?'
+  }
+} as const
+
 export const slotKeys: string[] = Object.keys(slotDefs)
 
 export function getSlotDef(key: string): SlotDef | undefined {
   return slotDefs[key]
+}
+
+// Returns the slot definitions for the given scope: project spine or page
+// follow-ups. Page scope never inherits project defs.
+export function slotDefsFor(scope: IntakeScope): Record<string, SlotDef> {
+  if (scope.kind === 'page') return pageSlotDefs
+  return slotDefs
 }
 
 export function slotKeysList(): string[] {
@@ -328,6 +444,22 @@ export function validateSlotValue(def: SlotDef, value: unknown): { ok: true; dat
       }
       return { ok: true, data: [...value] }
     }
+    case 'page-list': {
+      if (!Array.isArray(value)) {
+        return { ok: false, message: `Value for '${def.key}' must be a list` }
+      }
+      const max = def.maxItems ?? 12
+      if (value.length > max) {
+        return { ok: false, message: `Value for '${def.key}' has ${value.length} items (max ${max})` }
+      }
+      for (const item of value) {
+        const parsed = _pageChoiceSchema.safeParse(item)
+        if (!parsed.success) {
+          return { ok: false, message: `Each item in '${def.key}' must be { name, purpose } text` }
+        }
+      }
+      return { ok: true, data: [...value] }
+    }
     default:
       return { ok: false, message: `Unknown slot type '${def.type}'` }
   }
@@ -335,34 +467,92 @@ export function validateSlotValue(def: SlotDef, value: unknown): { ok: true; dat
 
 // coverage: the required slots still missing or inferred, plus a weighted
 // score (0-100). Intake is complete when every required slot is stated.
-export function coverage(slots: Map<string, SlotValue>): {
-  missing: string[]
-  inferred: string[]
-  score: number
-  complete: boolean
+// defs defaults to the project slot defs so existing callers still compile.
+export function coverage(
+  slots: Map<string, SlotValue>,
+  defs: Record<string, SlotDef> = slotDefs
+): {
+  missing: string[]   // required slots with no value at all
+  inferred: string[]  // required slots that have a value but basis is inferred
+  score: number       // 0-100 over required slots
+  complete: boolean   // every required slot is stated
 } {
   const missing: string[] = []
   const inferred: string[] = []
   let totalWeight = 0
   let statedWeight = 0
 
-  for (const key of slotKeys) {
-    const def = slotDefs[key]!
+  const keys = Object.keys(defs)
+  for (const key of keys) {
+    const def = defs[key]!
     if (!def.required) continue
     totalWeight += def.weight
     const slot = slots.get(key)
-    if (!slot || slot.basis !== 'stated') {
+    if (!slot) {
       missing.push(key)
-    } else {
+    } else if (slot.basis === 'stated') {
       statedWeight += def.weight
-    }
-    if (slot && slot.basis === 'inferred') {
+    } else {
       inferred.push(key)
     }
   }
 
   const score = totalWeight === 0 ? 100 : Math.round((statedWeight / totalWeight) * 100)
-  return { missing, inferred, score, complete: missing.length === 0 }
+  return { missing, inferred, score, complete: missing.length === 0 && inferred.length === 0 }
 }
 
 export type SlotDefInput = SlotDef
+
+// ── renderBrief (Part 4.5) ───────────────────────────────────────────────────
+//
+// Turns the slot state into a compact, stable text block: stated slots as
+// constraints, inferred slots marked "(unconfirmed, do not rely on it)",
+// plus page names and purposes. One renderer means the product describes the
+// project to the model the same way everywhere (intake, variant generation).
+
+export interface SlotState {
+  slots: Map<string, SlotValue>
+  pages: Array<{ name: string; purpose: string }>
+}
+
+function fmtValue(def: SlotDef, value: unknown): string {
+  if (value === undefined || value === null) return ''
+  if (Array.isArray(value)) return value.join(', ')
+  return String(value)
+}
+
+export function renderBrief(state: SlotState): string {
+  const lines: string[] = []
+  lines.push('Project brief (slot state):')
+  for (const key of slotKeys) {
+    const def = slotDefs[key]!
+    const slot = state.slots.get(key)
+    if (!slot || slot.value === undefined) continue
+    const marker = slot.basis === 'stated' ? '' : ' (unconfirmed, do not rely on it)'
+    lines.push(`- ${def.label} (${key}): ${fmtValue(def, slot.value)}${marker}`)
+  }
+  if (state.pages.length > 0) {
+    lines.push('')
+    lines.push('Pages:')
+    for (const page of state.pages) {
+      lines.push(`- ${page.name}: ${page.purpose}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+// canContinue: pure check whether intake is far enough to move on.
+// project -> purpose stated AND pages has at least one entry.
+// page -> purpose stated.
+export function canContinue(state: ProjectState, scope: IntakeScope): boolean {
+  if (scope.kind === 'project') {
+    const purpose = state.intake.get('purpose')
+    const pages = state.intake.get('pages')
+    if (!purpose || purpose.basis !== 'stated' || purpose.value === undefined) return false
+    if (!Array.isArray(pages?.value) || pages.value.length < 1) return false
+    return true
+  }
+  const pageIntake = state.pageIntake.get(scope.pageId)
+  const purpose = pageIntake?.slots.get('purpose')
+  return purpose !== undefined && purpose.basis === 'stated' && purpose.value !== undefined
+}

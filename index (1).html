@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quil</title>
+  <style>
+    :root {
+      --bg: #15100d;
+      --card: #1d1713;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      background: var(--bg);
+    }
+
+    .workspace {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 312px 1fr 300px;
+    }
+
+    .center {
+      padding: 250px;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .canvas {
+      width: 100%;
+      height: 100%;
+      background: var(--card);
+      border-radius: 8px;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 12px 32px rgba(0, 0, 0, 0.45);
+    }
+  </style>
+</head>
+
+<body>
+  <div class="workspace">
+    <aside class="left"></aside>
+    <main class="center">
+      <div class="canvas"></div>
+    </main>
+    <aside class="right"></aside>
+  </div>
+</body>
+
+</html>

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { applyCommand } from '../../src/core/apply'
 import { createProjectState } from '../../src/core/state'
 import {
   followUpQuestionsResponseSchema,

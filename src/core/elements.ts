@@ -16,10 +16,19 @@ export const elementKinds = ['heading', 'text', 'image', 'button', 'card', 'navi
 export type ElementKind = (typeof elementKinds)[number]
 export type NodeKind = ElementKind | 'section'
 
+export const layoutArchetypes = ['stack', 'centered', 'split', 'grid-2', 'grid-3', 'list'] as const
+export type LayoutArchetype = (typeof layoutArchetypes)[number]
+
+export const layoutSchema = z.enum([...layoutArchetypes]).optional()
+
+export const nodeKindSchema = z.enum([...elementKinds, 'section'])
+
 export const sectionPropsSchema = z
   .object({
     bgColor: colorValue.optional(),
-    padding: spacingValue.optional()
+    padding: spacingValue.optional(),
+    layout: layoutSchema,
+    gap: spacingValue.optional()
   })
   .strict()
 
@@ -69,7 +78,8 @@ export const cardPropsSchema = z
     bgColor: colorValue.optional(),
     radius: radiusValue.optional(),
     padding: spacingValue.optional(),
-    shadow: shadowValue.optional()
+    shadow: shadowValue.optional(),
+    gap: spacingValue.optional()
   })
   .strict()
 

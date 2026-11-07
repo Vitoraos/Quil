@@ -13,6 +13,34 @@ export const MAX_QUESTIONS = 6
 export const MAX_PAGES = 12
 export const MAX_PARAGRAPH = 280
 
+// ── Intake turn output contract (Part 3.4) ──────────────────────────────────
+
+export const slotUpdateSchema = z.object({
+  slot: z.string(), // narrowed to slotKeys at application time
+  value: z.unknown(), // re-parsed against that slot's SlotDef
+  basis: z.enum(['stated', 'inferred']),
+  confidence: z.number().min(0).max(1),
+  evidence: shortTextValue
+}).strict()
+
+export const intakeTurnOutputSchema = z.object({
+  updates: z.array(slotUpdateSchema).max(8),
+  next: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('ask'),
+      slots: z.array(z.string()).min(1).max(2),
+      question: shortTextValue,
+      options: z.array(shortTextValue).max(5).optional(),
+      why: shortTextValue
+    }).strict(),
+    z.object({
+      kind: z.literal('confirm'),
+      slots: z.array(z.string()).min(1)
+    }).strict(),
+    z.object({ kind: z.literal('done') }).strict()
+  ])
+}).strict()
+
 export const followUpQuestionSchema = z.object({
   id: specKeySchema,
   question: shortTextValue,
@@ -55,6 +83,8 @@ export const pageSpecResponseSchema = z.object({
 export type FollowUpQuestion = z.infer<typeof followUpQuestionSchema>
 export type PageSuggestion = z.infer<typeof pageSuggestionSchema>
 export type GeneratedPageSpec = z.infer<typeof pageSpecResponseSchema>
+export type SlotUpdate = z.infer<typeof slotUpdateSchema>
+export type IntakeTurnOutput = z.infer<typeof intakeTurnOutputSchema>
 
 /** Parse provider output strictly, rejecting anything that doesn't match. */
 export function parseProviderResponse<T>(schema: z.ZodSchema<T>, raw: unknown, target: string): T {

@@ -1,6 +1,6 @@
 import * as React from 'react'
 
-export const Layers = React.forwardRef<HTMLDivElement, { className?: string; children?: React.ReactNode }>(
+export const Layers = React.forwardRef<HTMLDivElement, { className?: string; children?: React.ReactNode; overlay?: React.ReactNode }>(
   (props, ref) => (
   <div
     ref={ref}
@@ -37,7 +37,9 @@ export const Layers = React.forwardRef<HTMLDivElement, { className?: string; chi
         zIndex: 10,
         pointerEvents: 'none'
       }}
-    />
+    >
+      {props.overlay}
+    </div>
     {/* Layer 3: ephemeral gesture layer */}
     <div
       data-layer="gesture"

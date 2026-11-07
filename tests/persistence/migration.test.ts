@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import type { ProjectState } from '../../src/core'
 import { referenceProject } from '../../src/core'
 import {
   SCHEMA_VERSION,
@@ -11,17 +10,19 @@ import {
 
 describe('persistence: migration', () => {
   it('reports current schema version', () => {
-    expect(SCHEMA_VERSION).toBe(2)
+    expect(SCHEMA_VERSION).toBe(4)
   })
 
-  it('migrates v1 state to v2 by adding intake/brief/specs fields', () => {
+  it('migrates v1 state to v4 by adding intake/brief/specs fields', () => {
     const v1 = referenceProject() as unknown as Record<string, unknown>
     const result = migrate(v1 as never, 1)
-    expect(result.schemaVersion).toBe(2)
+    expect(result.schemaVersion).toBe(4)
     expect(result.brief).toBe('')
     expect(result.intakeAnswers.size).toBe(0)
     expect(result.startingPageId).toBeNull()
     expect(result.pageSpecs.size).toBe(0)
+    expect(result.intake.size).toBe(0)
+    expect(result.seenTurnIds).toEqual([])
   })
 
   it('migrate is a no-op when already at current version', () => {

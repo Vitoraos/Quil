@@ -5,6 +5,8 @@
 // operation has its own schema. A mock provider returns deterministic fixtures;
 // one real adapter (BYOK) sits behind the interface.
 
+import type { IntakeTurnOutput } from './schemas'
+
 export interface FollowUpQuestion {
   id: string
   question: string
@@ -37,6 +39,14 @@ export interface FollowUpInput {
   answers: Record<string, string>
 }
 
+export interface PlanIntakeTurnInput {
+  schema: string
+  state: Record<string, unknown>
+  summary: string
+  lastQuestion: string
+  userTurn: string
+}
+
 export interface SuggestPagesInput {
   brief: string
   answers: Record<string, string>
@@ -57,6 +67,9 @@ export interface AIProvider {
 
   /** Generate a full page spec from brief + answers for a single page. */
   generatePageSpec(input: GeneratePageSpecInput, signal?: AbortSignal): Promise<GeneratedPageSpec>
+
+  /** One intake turn: extract facts into slots and pick the next gap to ask. */
+  planIntakeTurn(input: PlanIntakeTurnInput, signal?: AbortSignal): Promise<IntakeTurnOutput>
 }
 
 export class ProviderError extends Error {

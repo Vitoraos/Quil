@@ -9,6 +9,7 @@ import { demoProject } from '../../core'
 import { createResolver } from '../../app/resolve'
 import { QuilStore } from '../../app/store'
 import { Canvas } from '../../app/renderer'
+import { newCommandId } from '../../app/command-id'
 import { Button, Card, FeatherPen, PenLoader, StatusMessage } from '../../ui'
 
 const DEMO_PAGE_ID = 'page-demo' as never
@@ -68,7 +69,7 @@ export function LiveDemo(): React.ReactElement {
       const baseRev = store.getState().rev
       const applied = store.dispatch({
         type: 'set_property',
-        commandId: `cmd-demo-global-${Date.now()}` as never,
+        commandId: newCommandId('demo-global'),
         baseRev,
         targetId: B1,
         property: 'bgColor',
@@ -100,7 +101,7 @@ export function LiveDemo(): React.ReactElement {
       const baseRev = store.getState().rev
       store.dispatch({
         type: 'set_property',
-        commandId: `cmd-demo-reset-${Date.now()}` as never,
+        commandId: newCommandId('demo-reset'),
         baseRev,
         targetId: B1,
         property: 'bgColor',

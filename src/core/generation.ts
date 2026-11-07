@@ -10,7 +10,7 @@
 // Pure — no React, DOM, network, or AI-provider imports. Runs in Node tests.
 
 import { z } from 'zod'
-import { candidateIdSchema, elementIdSchema } from './ids'
+import { candidateIdSchema, elementIdSchema, type ElementId } from './ids'
 import {
   colorValue,
   fontSizeValue,
@@ -19,11 +19,11 @@ import {
   shortTextValue,
   spacingValue
 } from './values'
-import type { ElementKind, NodeKind } from './elements'
+import type { NodeKind } from './elements'
 import type { PageSpec } from './specs'
-import type { DesignElement, ProjectState } from './state'
+import type { ProjectState } from './state'
 import { resolveElement } from './decisions'
-import { applicableDecisions as applicableDecisionsFromResolver } from './decisions'
+import { renderBrief } from './intake-schema'
 
 // culori is a pure color library (no React/DOM/network/AI), safe for core/.
 import { wcagContrast as contrast } from 'culori'
@@ -78,7 +78,6 @@ export const targetDefs: Record<string, ComponentDef> = {
     kind: 'section',
     props: [
       { property: 'bgColor', required: true, type: 'color' },
-      { property: 'textColor', required: true, type: 'color' },
       { property: 'padding', required: false, type: 'spacing' }
     ],
     constraints: [
@@ -199,7 +198,7 @@ export interface GenerationContext {
 export function buildGenerationContext(
   state: ProjectState,
   targetId: string,
-  targetType: TargetType
+  _targetType: TargetType
 ): { ok: true; context: GenerationContext } | { ok: false; error: { code: string; message: string } } {
   const element = state.nodes.get(targetId as never)
   if (!element) {
@@ -238,7 +237,217 @@ export function buildGenerationContext(
     neighbors: siblings,
     applicableDecisions: applicableDecisionsList,
     targetRev: element.rev,
-    decisionRegistryVersion: state.decisions.size
+    decisionRegistryVersion: state.rev
+  }
+
+  return { ok: true, context }
+}
+
+// ── Variant context (Part 5.2) ─────────────────────────────────────────────
+//
+// A richer, deterministic context built purely from state. Every field is
+// derived from the document, never from the UI. Used by the variant generator
+// so proposals reflect the page choices and purpose the user confirmed.
+
+export interface VariantProject {
+  brief: string // renderBrief(state): the single source of truth for the project
+}
+
+export interface VariantPage {  name: string
+  purpose: string
+  position: number // 1-based index among the site's pages
+  otherPages: Array<{ name: string; purpose: string }>
+}
+
+export interface VariantSection {
+  key: string
+  purpose: string
+  position: number // 1-based index on the page
+  elements: Array<{ id: string; kind: string; purpose: string }>
+}
+
+export interface VariantTarget {
+  id: string
+  kind: string
+  componentDefId: string | null // null when no definition matches this element
+  purpose: string
+  required: boolean
+  props: Record<string, unknown>
+}
+
+export interface VariantHouseRule {
+  id: string
+  property: string
+  value: unknown
+  scope: unknown
+}
+
+export interface VariantHistoryEntry {
+  componentDefId: string
+  props: Record<string, unknown>
+}
+
+export interface VariantRevisions {
+  targetRev: number
+  decisionVersion: number // monotonic state.rev
+  specVersion: number
+}
+
+export interface VariantContext {
+  project: VariantProject
+  page: VariantPage
+  section: VariantSection
+  target: VariantTarget
+  houseRules: VariantHouseRule[]
+  palette: string[] // distinct colours resolved on the page, max 8
+  history: VariantHistoryEntry[] // rejected candidates for this target, max 5
+  revisions: VariantRevisions
+}
+
+export function buildVariantContext(
+  state: ProjectState,
+  targetId: string,
+  targetType: TargetType,
+  history: VariantHistoryEntry[] = []
+): { ok: true; context: VariantContext } | { ok: false; error: { code: string; message: string } } {
+  const element = state.nodes.get(targetId as never)
+  if (!element) {
+    return { ok: false, error: { code: 'TARGET_MISSING', message: `Target element ${targetId} not found` } }
+  }
+
+  const page = state.pages.get(element.pageId)
+  if (!page) {
+    return { ok: false, error: { code: 'TARGET_MISSING', message: `Target page ${element.pageId} not found` } }
+  }
+
+  // Project block: renderBrief is the single source of truth for how Quil
+  // describes the project to the model.
+  const pageOrder = [...state.pages.values()]
+  const pageIndex = pageOrder.findIndex((p) => p.id === element.pageId)
+  const position = pageIndex >= 0 ? pageIndex + 1 : 1
+  const otherPages = pageOrder
+    .filter((p) => p.id !== element.pageId)
+    .slice(0, 12)
+    .map((p) => ({ name: p.name, purpose: state.pageSpecs.get(p.id)?.purpose ?? '' }))
+
+  const pageSpec = state.pageSpecs.get(element.pageId as never)
+  const pagePurpose = pageSpec?.purpose ?? ''
+
+  // Section block: the spec section that contains this target, if any.
+  let sectionKey = ''
+  let sectionPurpose = ''
+  let sectionPosition = 0
+  let sectionElements: Array<{ id: string; kind: string; purpose: string }> = []
+  let targetRequired = false
+  let targetPurpose = ''
+  if (pageSpec) {
+    let secIndex = 0
+    for (const section of pageSpec.sections) {
+      secIndex++
+      const el = section.elements.find((e) => e.elementId === targetId)
+      if (el) {
+        sectionKey = section.key
+        sectionPurpose = section.purpose
+        sectionPosition = secIndex
+        targetRequired = el.required
+        targetPurpose = el.purpose
+        sectionElements = section.elements.map((e) => ({
+          id: e.elementId ?? '',
+          kind: e.kind,
+          purpose: e.purpose
+        }))
+        break
+      }
+    }
+  }
+
+  // Target definition: a section whose spec key is 'hero' maps to the hero
+  // definition; a button maps to button; anything else has no definition.
+  let componentDefId: string | null = null
+  if (element.kind === 'section' && sectionKey === 'hero' && targetDefs['hero']) {
+    componentDefId = 'hero'
+  } else if (element.kind === 'button' && targetDefs['button']) {
+    componentDefId = 'button'
+  }
+
+  const resolved = resolveElement(state, targetId as never)
+  const applicable = resolved.ok ? resolved.result.provenance : new Map<string, string>()
+  const houseRules: VariantHouseRule[] = Array.from(applicable.entries()).map(([property, decId]) => {
+    const dec = state.decisions.get(decId as never)
+    return { id: decId, property, value: dec ? dec.value : undefined, scope: dec ? dec.scope : undefined }
+  })
+
+  // Palette: distinct colours resolved on this page (using resolved/approved
+  // decisions), max 8. Resolving per element ensures approved decisions are
+  // reflected, not just base props.
+  const paletteSet = new Set<string>()
+  const collectColors = (props: Record<string, unknown>) => {
+    for (const v of Object.values(props)) {
+      if (typeof v === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) {
+        paletteSet.add(v)
+      }
+    }
+  }
+  if (pageSpec) {
+    for (const section of pageSpec.sections) {
+      // Collect from the section node itself
+      const sectionElementId = `sec-${pageSpec.pageId}-${section.key}` as ElementId
+      const sectionNode = state.nodes.get(sectionElementId)
+      if (sectionNode) {
+        const resolved = resolveElement(state, sectionElementId)
+        if (resolved.ok) {
+          collectColors(resolved.result.props)
+        } else {
+          collectColors(sectionNode.props)
+        }
+      }
+      // Collect from section elements
+      for (const el of section.elements) {
+        if (el.elementId) {
+          const node = state.nodes.get(el.elementId as never)
+          if (node) {
+            const resolved = resolveElement(state, el.elementId as never)
+            if (resolved.ok) {
+              collectColors(resolved.result.props)
+            } else {
+              collectColors(node.props)
+            }
+          }
+        }
+      }
+    }
+  }
+  // Also resolve the target element itself.
+  const targetResolved = resolveElement(state, targetId as never)
+  if (targetResolved.ok) {
+    collectColors(targetResolved.result.props)
+  } else {
+    collectColors(element.props)
+  }
+  const palette = [...paletteSet].slice(0, 8)
+
+  const specVersion = pageSpec?.version ?? 0
+
+  const context: VariantContext = {
+    project: { brief: renderBrief({ slots: state.intake, pages: [] }) },
+    page: { name: page.name, purpose: pagePurpose, position, otherPages },
+    section: { key: sectionKey, purpose: sectionPurpose, position: sectionPosition, elements: sectionElements },
+    target: {
+      id: element.id,
+      kind: element.kind,
+      componentDefId,
+      purpose: targetPurpose,
+      required: targetRequired,
+      props: { ...element.props }
+    },
+    houseRules,
+    palette,
+    history: history.slice(0, 5),
+    revisions: {
+      targetRev: element.rev,
+      decisionVersion: state.rev,
+      specVersion
+    }
   }
 
   return { ok: true, context }

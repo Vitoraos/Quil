@@ -12,7 +12,7 @@ export interface RecoveryScreenProps {
 }
 
 export function RecoveryScreen({
-  projectId,
+  projectId: _projectId,
   error,
   backup,
   onRetry,

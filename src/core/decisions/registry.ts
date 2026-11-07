@@ -1,7 +1,7 @@
 import type { Draft } from 'immer'
 import type { DesignDecision, DecisionScope, DesignElement, ProjectState } from '../state'
 import type { NodeKind } from '../elements'
-import { decisionIdSchema, type DecisionId, type ElementId, type PageId } from '../ids'
+import { decisionIdSchema, type DecisionId } from '../ids'
 
 export function scopesMatch(a: DecisionScope, b: DecisionScope): boolean {
   if (a.kind === 'instance' && b.kind === 'instance') return a.elementId === b.elementId

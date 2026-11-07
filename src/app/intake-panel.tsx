@@ -1,9 +1,10 @@
 import * as React from 'react'
-import { useCallback, useState } from 'react'
-import type { ElementId, PageId, ProjectState } from '../core'
+import { useState } from 'react'
+import type { PageId, ProjectState } from '../core'
 import { QuilStore } from './store'
+import { newCommandId } from './command-id'
 import { mockProvider } from '../modules/intake/mock-provider'
-import type { GeneratedPageSpec, PageSuggestion, FollowUpQuestion } from '../modules/intake/provider'
+import type { GeneratedPageSpec, FollowUpQuestion } from '../modules/intake/provider'
 import { pageSpecSchema, validatePageSpec } from '../core/specs'
 
 type IntakeStep = 'brief' | 'questions' | 'pages' | 'spec' | 'skeleton' | 'done'
@@ -48,15 +49,14 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
   const [pages, setPages] = useState<{ id: PageId; name: string }[]>([])
   const [pageNames, setPageNames] = useState<Record<PageId, string>>({})
   const [selectedPageId, setSelectedPageId] = useState<PageId | null>(null)
-  const [pageSpecs, setPageSpecs] = useState<Record<PageId, GeneratedPageSpec>>({})
   const [editingSpec, setEditingSpec] = useState<GeneratedPageSpec | null>(null)
-  const [specBeingEdited, setSpecBeingEdited] = useState<PageId | null>(null)
+  const [_specBeingEdited, setSpecBeingEdited] = useState<PageId | null>(null)
   const [conflicts, setConflicts] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const existingSpec = state.pageSpecs.get(selectedPageId ?? '' as PageId)
-  const hasSpecForPage = selectedPageId ? !!state.pageSpecs.get(selectedPageId) : false
+  const _existingSpec = state.pageSpecs.get(selectedPageId ?? '' as PageId)
+  const _hasSpecForPage = selectedPageId ? !!state.pageSpecs.get(selectedPageId) : false
 
   const goBrief = (): void => {
     setError(null)
@@ -122,11 +122,11 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
       setPages(newPages)
       setPageNames(newNames)
       // Also persist pages via commands
-      newPages.forEach((p, i) => {
+      newPages.forEach((p) => {
         if (!state.pages.has(p.id)) {
           store.dispatch({
             type: 'add_page',
-            commandId: `cmd-add-page-${Date.now()}-${i}` as never,
+            commandId: newCommandId('add-page'),
             baseRev: store.getState().rev,
             pageId: p.id,
             name: p.name
@@ -148,7 +148,7 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
     setPageNames({ ...pageNames, [id]: name })
     store.dispatch({
       type: 'add_page',
-      commandId: `cmd-add-page-${Date.now()}` as never,
+      commandId: newCommandId('add-page'),
       baseRev: store.getState().rev,
       pageId: id,
       name
@@ -163,7 +163,7 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
     if (selectedPageId === id) setSelectedPageId(null)
     store.dispatch({
       type: 'remove_page',
-      commandId: `cmd-remove-page-${Date.now()}` as never,
+      commandId: newCommandId('remove-page'),
       baseRev: store.getState().rev,
       pageId: id
     })
@@ -174,7 +174,7 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
     setPages(pages.map((p) => (p.id === id ? { ...p, name } : p)))
     store.dispatch({
       type: 'rename_page',
-      commandId: `cmd-rename-page-${Date.now()}` as never,
+      commandId: newCommandId('rename-page'),
       baseRev: store.getState().rev,
       pageId: id,
       name
@@ -195,44 +195,6 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
     } else {
       setEditingSpec(null)
       setConflicts([])
-    }
-  }
-
-  const generateSpec = async (): Promise<void> => {
-    if (!selectedPageId) return
-    setError(null)
-    setSaving(true)
-    try {
-      const spec = await mockProvider.generatePageSpec({
-        brief,
-        answers,
-        pageName: pageNames[selectedPageId] ?? ''
-      })
-      setEditingSpec(spec)
-      // Persist via command (version 1)
-      store.dispatch({
-        type: 'set_page_spec',
-        commandId: `cmd-set-spec-${Date.now()}` as never,
-        baseRev: store.getState().rev,
-        pageId: selectedPageId,
-        spec: {
-          pageId: selectedPageId,
-          name: spec.name,
-          purpose: spec.purpose,
-          version: 1,
-          sections: spec.sections.map((s) => ({
-            key: s.key,
-            purpose: s.purpose,
-            elements: s.elements.map((e) => ({ ...e, elementId: undefined }))
-          }))
-        }
-      })
-      detectConflicts(spec)
-      setStep('spec')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate spec')
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -316,7 +278,7 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
     try {
       store.dispatch({
         type: 'instantiate_spec_skeleton',
-        commandId: `cmd-instantiate-${Date.now()}` as never,
+        commandId: newCommandId('instantiate'),
         baseRev: store.getState().rev,
         pageId: selectedPageId
       })
@@ -327,8 +289,6 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
       setSaving(false)
     }
   }
-
-  const pageSelectDisabled = pages.length === 0
 
   return (
     <div
@@ -350,11 +310,11 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
           data-testid="intake-error"
           style={{
             padding: 'var(--quil-space-2) var(--quil-space-3)',
-            background: '#fee2e2',
-            color: '#991b1b',
+            background: 'var(--quil-danger-bg)',
+            color: 'var(--quil-danger-text)',
             borderRadius: 'var(--quil-radius-sm)',
             fontSize: 'var(--quil-text-sm)',
-            border: '1px solid #fecaca',
+            border: `var(--quil-border-width) solid var(--quil-danger-line)`,
           }}
         >
           {error}
@@ -366,11 +326,11 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
           data-testid="intake-conflicts"
           style={{
             padding: 'var(--quil-space-2) var(--quil-space-3)',
-            background: '#fef3c7',
-            color: '#92400e',
+            background: 'var(--quil-warning-bg)',
+            color: 'var(--quil-warning-text)',
             borderRadius: 'var(--quil-radius-sm)',
             fontSize: 'var(--quil-text-sm)',
-            border: '1px solid #fcd34d',
+            border: `var(--quil-border-width) solid var(--quil-warning-line)`,
           }}
         >
           <div style={{ fontWeight: 600, marginBottom: 'var(--quil-space-1)' }}>Conflicts:</div>
@@ -571,7 +531,7 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
               <div style={{ fontWeight: 600, marginBottom: 'var(--quil-space-1)' }}>{section.key}</div>
               <input
                 value={section.purpose}
-                onChange={(e) => {
+                onChange={(_e) => {
                   // Purpose edit not implemented inline for brevity
                 }}
                 style={{
@@ -663,7 +623,7 @@ export function IntakePanel({ store, state }: IntakePanelProps): React.ReactElem
 
       {step === 'done' && (
         <div>
-          <div style={{ color: '#16a34a', fontWeight: 600, marginBottom: 'var(--quil-space-1)' }}>
+          <div style={{ color: 'var(--quil-success-strong)', fontWeight: 600, marginBottom: 'var(--quil-space-1)' }}>
             ✓ Intake complete
           </div>
           <div style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-sm)' }}>

@@ -1,72 +1,65 @@
-/* Quil design system tokens.
+/* Quil design tokens — DARK THEME (espresso #15100d / porcelain #f5f0f0)
  *
- * Rule: every colour, type size, space, radius, shadow and duration lives here.
- * Components must not contain raw colours, font sizes or shadows.
+ * Every colour, type size, space, radius, shadow and duration lives here.
+ * Components must NOT contain raw colours, font sizes or shadows — they
+ * reference these custom properties only.
  *
- * Dark theme only. Monochrome with no pure white / pure black, plus ONE violet
- * accent. Text intensity is colour tone, never opacity.
+ * Palette: dark theme. Background #15100d, text #f5f0f0, button #f5f0f0,
+ * button text #15100d. Text intensity is colour tone, never opacity.
+ * One accent: porcelain #f5f0f0.
  */
 
 :root {
-  /* ---------- Backgrounds (dark theme, no pure black) ---------- */
-  --quil-bg: #0A0A0C;
-  --quil-surface: #141418;
-  --quil-surface-hover: #1E1E22;
-  --quil-line: #27272B;
+  /* ---------- Canvas background (tracks user software UI bg) ---------- */
+  --quil-canvas-bg: rgba(21, 16, 13, 0.10);
+
+  /* ---------- Backgrounds (dark theme) ---------- */
+  --quil-bg: #15100d;
+  --quil-surface: #211b16;
+  --quil-surface-hover: #2d251f;
+  --quil-line: #3a3029;
 
   /* ---------- Text intensity — colour tone, never opacity ---------- */
-  --quil-text-100: #F5F3EC;
-  --quil-text-95: #E7E4DC;
-  --quil-text-90: #CFCBC1;
-  --quil-text-85: #B3AEA4;
-  --quil-text-80: #9A9489;
-  --quil-text-75: #8A847A;
-  --quil-text-70: #868076;
+  --quil-text-100: #f5f0f0;
+  --quil-text-95: #d8d0cf;
+  --quil-text-90: #ada3a1;
+  --quil-text-85: #807572;
+  --quil-text-80: #807572;
+  --quil-text-75: #6a605e;
+  --quil-text-70: #554b49;
 
-  /* ---------- Single violet accent ---------- */
-  --quil-accent: #8B5CF6;
-  --quil-accent-hover: #7C3AED;
+  /* ---------- Single accent: porcelain #f5f0f0 ---------- */
+  --quil-accent: #f5f0f0;
+  --quil-accent-hover: #ffffff;
 
   /* Label colour on the accent — contract requires var(--bg) */
-  --quil-accent-text: var(--quil-bg);
+  --quil-accent-text: #15100d;
+
+  /* ---------- Button fill + label (explicit, not derived) ---------- */
+  --quil-button: #f5f0f0;
+  --quil-button-text: #15100d;
+  --quil-button-hover: #ffffff;
 
   /* ---------- Fonts ---------- */
-  --quil-font-ui: 'Inter', system-ui, sans-serif
-  --quil-font-head: 'Archivo', system-ui, sans-serif
+  --quil-font-ui: 'IBM Plex Mono', monospace;
+  --quil-font-head: 'Space Mono', monospace;
+  --quil-font-mono: 'Space Mono', monospace;
 
   /* ---------- Type scale ---------- */
   --quil-text-xs: 0.75rem;
-  --quil-text-sm: 0.875rem;
-  --quil-text-base: 1rem;
-  --quil-text-lg: 1.125rem;
-  --quil-text-xl: 1.25rem;
-
-  --quil-heading-1: 2.25rem;
-  --quil-heading-2: 1.875rem;
-  --quil-heading-3: 1.5rem;
-  --quil-heading-4: 1.25rem;
+  --quil-text-sm: 0.8125rem;
+  --quil-text-base: 0.875rem;
 
   /* ---------- Spacing ---------- */
-  --quil-space-0-5: 0.125rem;
-  --quil-space-1: 0.25rem;
-  --quil-space-2: 0.5rem;
-  --quil-space-3: 0.75rem;
-  --quil-space-4: 1rem;
-  --quil-space-5: 1.25rem;
-  --quil-space-6: 1.5rem;
-  --quil-space-8: 2rem;
-  --quil-space-10: 2.5rem;
-  --quil-space-12: 3rem;
-  --quil-space-16: 4rem;
-  --quil-space-24: 6rem;
-  --quil-space-2: 0.5rem;
-  --quil-space-3: 0.75rem;
-  --quil-space-4: 1rem;
-  --quil-space-5: 1.25rem;
-  --quil-space-6: 1.5rem;
-  --quil-space-8: 2rem;
+  --quil-space-1: 4px;
+  --quil-space-2: 8px;
+  --quil-space-3: 12px;
+  --quil-space-4: 16px;
+  --quil-space-5: 20px;
+  --quil-space-6: 24px;
 
   /* ---------- Radius ---------- */
+  --quil-radius-xs: 5px;
   --quil-radius-sm: 6px;
   --quil-radius-md: 10px;
   --quil-radius-lg: 12px;
@@ -74,13 +67,13 @@
   /* ---------- Border width ---------- */
   --quil-border-width: 1px;
 
-  /* ---------- Shadow — hard 3px edge token ---------- */
-  --quil-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.1);
-  --quil-shadow-2: 0 4px 6px rgba(0, 0, 0, 0.1);
-  --quil-shadow-3: 0 3px 0 rgba(0, 0, 0, 0.35);
+  /* ---------- Shadow ---------- */
+  --quil-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --quil-shadow-2: 0 4px 6px rgba(0, 0, 0, 0.35);
+  --quil-shadow-3: 0 24px 48px rgba(0, 0, 0, 0.35);
 
-  /* ---------- Press distance (mechanical button press) ---------- */
-  --quil-press: 3px;
+  /* ---------- Press distance ---------- */
+  --quil-press: 0px;
   --quil-edge: 0px;
 
   /* ---------- Duration ---------- */
@@ -90,6 +83,15 @@
   /* ---------- Minimum touch targets ---------- */
   --quil-target-min: 44px;
   --quil-target-icon: 40px;
+
+  /* ---------- Focus / overlays ---------- */
+  --quil-focus-ring: 2px solid var(--quil-accent);
+  --quil-overlay: rgba(0, 0, 0, 0.4);
+  --quil-backdrop: rgba(0, 0, 0, 0.5);
+
+  /* ---------- Status ---------- */
+  --quil-warn: #f2b63c;
+  --quil-ok: #3ecf8e;
 }
 
 @media (prefers-reduced-motion: reduce) {

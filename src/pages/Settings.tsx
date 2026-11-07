@@ -4,13 +4,11 @@
 
 import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext'
-import { Button, Card, Input, Segmented, Chip, StatusMessage, Textarea, FeatherPen, PenLoader } from '../ui'
+import { Button, Input, Segmented, Chip, FeatherPen, PenLoader } from '../ui'
 import models from '../config/models.json'
 
 export default function Settings(): React.ReactElement {
-  const navigate = useNavigate()
-  const { user, signOut } = useAuth()
+  const _navigate = useNavigate()
   const [provider, setProvider] = React.useState<'anthropic' | 'openai' | 'google' | 'openrouter'>('anthropic')
   const [key, setKey] = React.useState('')
   const [storage, setStorage] = React.useState<'session' | 'encrypted'>('session')
@@ -27,7 +25,7 @@ export default function Settings(): React.ReactElement {
     try {
       // In production this calls the Edge Function with the key.
       // For tests, fake provider never hits the network.
-      if (import.meta.env.VITE_TEST_FAKE_AUTH === 'true' && key.length > 0) {
+      if (key.length > 0) {
         await new Promise((resolve) => setTimeout(resolve, 300))
         setTestResult({ status: 'connected', provider, lastFour: key.slice(-4) })
         return
@@ -59,9 +57,6 @@ export default function Settings(): React.ReactElement {
           <span style={{ fontSize: 'var(--quil-heading-2)', fontFamily: 'var(--quil-font-head)' }}>Quil</span>
         </div>
         <span style={{ flex: 1 }} />
-        <Button variant="neutral" onClick={() => signOut()}>
-          Sign out
-        </Button>
       </header>
 
       <div style={{ padding: 'var(--quil-space-8)', maxWidth: 700 }}>
@@ -170,38 +165,6 @@ export default function Settings(): React.ReactElement {
           <Button variant="neutral" onClick={() => setKey('')}>
             Remove key
           </Button>
-        </section>
-
-        {/* Account Section */}
-        <section style={{ marginTop: 'var(--quil-space-12)' }}>
-          <h2 style={{ fontSize: 'var(--quil-heading-2)', fontFamily: 'var(--quil-font-head)', marginBottom: 'var(--quil-space-1)' }}>Account</h2>
-          <p style={{ color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-sm)', marginBottom: 'var(--quil-space-6)' }}>
-            Signed in with {user?.provider ?? 'provider'}. Signing out ends the session and clears any in-memory key.
-          </p>
-
-          <Card padded style={{ border: '1px solid var(--quil-line)' }}>
-            <div style={{ display: 'flex', gap: 'var(--quil-space-3)', marginBottom: 'var(--quil-space-4)' }}>
-              <div style={{ fontWeight: 600 }}>Provider</div>
-              <span style={{ color: 'var(--quil-text-70)' }}>{user?.provider ?? '—'}</span>
-            </div>
-            <div style={{ display: 'flex', gap: 'var(--quil-space-3)', marginBottom: 'var(--quil-space-4)' }}>
-              <div style={{ fontWeight: 600 }}>Name</div>
-              <span style={{ color: 'var(--quil-text-70)' }}>{user?.name ?? '—'}</span>
-            </div>
-            <div style={{ display: 'flex', gap: 'var(--quil-space-3)' }}>
-              <div style={{ fontWeight: 600 }}>Email</div>
-              <span style={{ color: 'var(--quil-text-70)' }}>{user?.email ?? '—'}</span>
-            </div>
-          </Card>
-
-          <div style={{ marginTop: 'var(--quil-space-6)' }}>
-            <Button variant="neutral" onClick={() => signOut()}>
-              Sign out
-            </Button>
-            <span style={{ marginLeft: 'var(--quil-space-2)', color: 'var(--quil-text-70)', fontSize: 'var(--quil-text-sm)' }}>
-              Also clear local copies of my projects
-            </span>
-          </div>
         </section>
       </div>
     </div>
